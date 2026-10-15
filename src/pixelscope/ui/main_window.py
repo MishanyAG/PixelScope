@@ -884,18 +884,72 @@ class MainWindow(QMainWindow):
         self._render_controls()
         self.statusBar().showMessage("Ready")
 
+    def _suggested_save_path(self) -> Path:
+        """Preserve the loaded image's name, safely adding an edited suffix."""
+        if self._document is None:
+            return Path("pixelscope_edited.png")
+        original = self._document.path
+        extension = original.suffix.lower()
+        # GIF is potentially animated, while PixelScope edits a single RGB
+        # frame. Export it as PNG rather than implying animation is retained.
+        if extension not in (".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"):
+            extension = ".png"
+        return original.with_name(f"{original.stem}_edited{extension}")
+
     def save_result(self) -> None:
         if self._result is None:
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Save processed image", "pixelscope-output.png",
-            "PNG image (*.png);;JPEG image (*.jpg);;BMP image (*.bmp)",
+
+        proposed = self._suggested_save_path()
+        filters = (
+            "PNG image (*.png);;JPEG image (*.jpg *.jpeg);;"
+            "BMP image (*.bmp);;TIFF image (*.tif *.tiff);;"
+            "WebP image (*.webp)"
+        )
+        extension_filters = {
+            ".png": "PNG image (*.png)",
+            ".jpg": "JPEG image (*.jpg *.jpeg)",
+            ".jpeg": "JPEG image (*.jpg *.jpeg)",
+            ".bmp": "BMP image (*.bmp)",
+            ".tif": "TIFF image (*.tif *.tiff)",
+            ".tiff": "TIFF image (*.tif *.tiff)",
+            ".webp": "WebP image (*.webp)",
+        }
+        path, chosen_filter = QFileDialog.getSaveFileName(
+            self,
+            "Save edited image",
+            str(proposed),
+            filters,
+            extension_filters.get(proposed.suffix.lower(), "PNG image (*.png)"),
         )
         if not path:
             return
+
+        target = Path(path)
+        if not target.suffix:
+            # If the filename is entered without an extension, use the
+            # selected format instead of silently inventing a .png.
+            filter_extensions = {
+                "PNG image (*.png)": ".png",
+                "JPEG image (*.jpg *.jpeg)": ".jpg",
+                "BMP image (*.bmp)": ".bmp",
+                "TIFF image (*.tif *.tiff)": ".tiff",
+                "WebP image (*.webp)": ".webp",
+            }
+            target = target.with_suffix(
+                filter_extensions.get(chosen_filter, proposed.suffix)
+            )
+        if self._document is not None and target.resolve() == self._document.path:
+            QMessageBox.warning(
+                self,
+                "Original image is protected",
+                "Choose another filename to avoid overwriting the source image.",
+            )
+            return
+
         try:
-            Image.fromarray(self._result).save(path)
-            self.statusBar().showMessage(f"Saved: {path}")
+            Image.fromarray(self._result).save(str(target))
+            self.statusBar().showMessage(f"Saved: {target}")
         except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "Could not save image", str(exc))
 
