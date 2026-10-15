@@ -1,10 +1,21 @@
+"""Main PixelScope desktop workspace.
+
+Every processing tool operates on the original image; previews never stack
+destructive transformations. Qt owns only widgets, not processing algorithms.
+"""
+
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt
+import cv2
+import numpy as np
+from PIL import Image
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -12,76 +23,124 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSizePolicy,
-    QSpacerItem,
+    QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
 from ..core.image_document import ImageDocument
+from ..core.processing import load_rgb, pixel_colors, run_tool
+from ..core.similarity import most_similar
+from ..core.video import VideoProcessor
+from .dialogs import HistogramDialog, SimilarityDialog
 from .image_viewer import ImageViewer
 
 
-_IMAGE_SUFFIXES = {
-    ".bmp",
-    ".gif",
-    ".jpeg",
-    ".jpg",
-    ".png",
-    ".tif",
-    ".tiff",
-    ".webp",
-}
+_IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+_SECTIONS = (
+    "Image", "Color", "Adjustments", "Histogram",
+    "Morphology", "Filters", "Features", "Compare", "Video",
+)
+_MORPHOLOGY = (
+    ("Erosion", "erode"),
+    ("Dilation", "dilate"),
+    ("Opening", "open"),
+    ("Closing", "close"),
+    ("Morphological gradient", "gradient"),
+)
+_FILTERS = (
+    ("Sharpen", "sharpen"),
+    ("Motion blur", "motion"),
+    ("Emboss", "emboss"),
+    ("Median filter", "median"),
+    ("Canny edges", "canny"),
+    ("Roberts edges", "roberts"),
+)
+_FEATURES = (
+    ("Harris corners", "harris"),
+    ("SIFT keypoints", "sift"),
+    ("FAST keypoints", "fast"),
+)
 
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self._document: ImageDocument | None = None
-        self._meta_values: dict[str, QLabel] = {}
+        self._source: np.ndarray | None = None
+        self._result: np.ndarray | None = None
+        self._selected_pixel: tuple[int, int] | None = None
+        self._section = "Image"
+        self._operation = "original"
+        self._navigation: dict[str, QPushButton] = {}
+
+        self._brightness = 0
+        self._contrast = 100
+        self._saturation = 100
+        self._gamma = 1.0
+        self._morph_k = 5
+        self._filter_k = 5
+        self._low = 70
+        self._high = 150
+        self._sensitivity = 20
+
+        self._capture: cv2.VideoCapture | None = None
+        self._video_processor: VideoProcessor | None = None
+        self._video_operation = "background"
+        self._video_timer = QTimer(self)
+        self._video_timer.timeout.connect(self._advance_video)
 
         self.setWindowTitle("PixelScope")
-        self.resize(1440, 900)
-        self.setMinimumSize(1080, 680)
+        self.resize(1530, 910)
+        self.setMinimumSize(1120, 670)
         self.setAcceptDrops(True)
 
         self._create_actions()
         self._build_ui()
-        self.statusBar().showMessage("Ready")
+        self._render_controls()
+        self.statusBar().showMessage("Ready · Open an image to get started")
 
     def _create_actions(self) -> None:
-        self._open_action = QAction("Open image…", self)
-        self._open_action.setShortcut(QKeySequence.StandardKey.Open)
-        self._open_action.triggered.connect(self.open_image)
-
-        exit_action = QAction("Exit", self)
-        exit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        exit_action.triggered.connect(self.close)
-
         file_menu = self.menuBar().addMenu("File")
-        file_menu.addAction(self._open_action)
+        open_action = QAction("Open image…", self)
+        open_action.setShortcut(QKeySequence.StandardKey.Open)
+        open_action.triggered.connect(self.open_image)
+        file_menu.addAction(open_action)
+
+        self._save_action = QAction("Save result…", self)
+        self._save_action.setShortcut(QKeySequence.StandardKey.Save)
+        self._save_action.triggered.connect(self.save_result)
+        self._save_action.setEnabled(False)
+        file_menu.addAction(self._save_action)
+
         file_menu.addSeparator()
-        file_menu.addAction(exit_action)
+        quit_action = QAction("Exit", self)
+        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
+        quit_action.triggered.connect(self.close)
+        file_menu.addAction(quit_action)
+
+        view_menu = self.menuBar().addMenu("View")
+        histogram_action = QAction("Compare histograms…", self)
+        histogram_action.triggered.connect(self._show_histograms)
+        view_menu.addAction(histogram_action)
 
     def _build_ui(self) -> None:
         root = QWidget()
-        root_layout = QHBoxLayout(root)
-        root_layout.setContentsMargins(0, 0, 0, 0)
-        root_layout.setSpacing(0)
-
-        root_layout.addWidget(self._build_sidebar())
-        root_layout.addWidget(self._build_workspace(), 1)
-
+        layout = QHBoxLayout(root)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self._build_sidebar())
+        layout.addWidget(self._build_workspace(), 1)
         self.setCentralWidget(root)
 
     def _build_sidebar(self) -> QFrame:
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(220)
-
-        layout = QVBoxLayout(sidebar)
-        layout.setContentsMargins(18, 22, 18, 18)
-        layout.setSpacing(6)
+        frame = QFrame()
+        frame.setObjectName("sidebar")
+        frame.setFixedWidth(204)
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(15, 22, 15, 18)
+        layout.setSpacing(5)
 
         brand = QLabel("PIXELSCOPE")
         brand.setObjectName("brand")
@@ -92,158 +151,364 @@ class MainWindow(QMainWindow):
         layout.addWidget(subtitle)
         layout.addSpacing(22)
 
-        sections = (
-            ("Image", True),
-            ("Color", False),
-            ("Adjustments", False),
-            ("Histogram", False),
-            ("Morphology", False),
-            ("Filters", False),
-            ("Features", False),
-            ("Compare", False),
-            ("Video", False),
-        )
-
-        for title, active in sections:
-            button = QPushButton(title)
+        for section in _SECTIONS:
+            button = QPushButton(section)
             button.setProperty("nav", True)
-            button.setProperty("active", active)
-            button.setEnabled(active)
+            button.setProperty("active", section == self._section)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda checked=False, name=section: self._switch_section(name))
             layout.addWidget(button)
+            self._navigation[section] = button
 
-        layout.addSpacerItem(
-            QSpacerItem(
-                20,
-                20,
-                QSizePolicy.Policy.Minimum,
-                QSizePolicy.Policy.Expanding,
-            )
-        )
-
-        version = QLabel("v0.1 · foundation")
+        layout.addStretch()
+        version = QLabel("v0.2 · processing suite")
         version.setObjectName("muted")
         layout.addWidget(version)
-
-        return sidebar
+        return frame
 
     def _build_workspace(self) -> QWidget:
-        workspace = QWidget()
-        layout = QVBoxLayout(workspace)
+        root = QWidget()
+        layout = QVBoxLayout(root)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
-
         layout.addWidget(self._build_topbar())
-        layout.addWidget(self._build_content(), 1)
 
-        return workspace
+        work = QWidget()
+        row = QHBoxLayout(work)
+        row.setContentsMargins(18, 20, 0, 20)
+        row.setSpacing(12)
+
+        self._source_view = ImageViewer("Original · click to sample pixel")
+        self._source_view.pixel_clicked.connect(self._on_pixel_clicked)
+        row.addWidget(self._source_view, 1)
+
+        self._result_view = ImageViewer("Processed")
+        row.addWidget(self._result_view, 1)
+        row.addWidget(self._build_inspector())
+
+        layout.addWidget(work, 1)
+        return root
 
     def _build_topbar(self) -> QFrame:
-        topbar = QFrame()
-        topbar.setObjectName("topbar")
-        topbar.setFixedHeight(76)
+        frame = QFrame()
+        frame.setObjectName("topbar")
+        frame.setFixedHeight(76)
 
-        layout = QHBoxLayout(topbar)
-        layout.setContentsMargins(24, 14, 24, 14)
-
-        title_box = QVBoxLayout()
-        title_box.setSpacing(1)
-
-        title = QLabel("Image workspace")
-        title.setObjectName("sectionTitle")
-        title_box.addWidget(title)
-
-        subtitle = QLabel("Inspect an image before applying processing tools")
-        subtitle.setObjectName("muted")
-        title_box.addWidget(subtitle)
-
-        layout.addLayout(title_box)
+        layout = QHBoxLayout(frame)
+        layout.setContentsMargins(23, 12, 23, 12)
+        self._workspace_title = QLabel("Image workspace")
+        self._workspace_title.setObjectName("sectionTitle")
+        layout.addWidget(self._workspace_title)
         layout.addStretch()
+
+        self._save_button = QPushButton("Save result")
+        self._save_button.setEnabled(False)
+        self._save_button.clicked.connect(self.save_result)
+        layout.addWidget(self._save_button)
 
         open_button = QPushButton("Open image")
         open_button.setObjectName("primaryButton")
-        open_button.setCursor(Qt.CursorShape.PointingHandCursor)
         open_button.clicked.connect(self.open_image)
         layout.addWidget(open_button)
+        return frame
 
-        return topbar
+    def _build_inspector(self) -> QScrollArea:
+        scroll = QScrollArea()
+        scroll.setObjectName("inspector")
+        scroll.setFixedWidth(300)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
-    def _build_content(self) -> QWidget:
-        content = QWidget()
-        layout = QHBoxLayout(content)
-        layout.setContentsMargins(24, 24, 0, 24)
-        layout.setSpacing(24)
+        panel = QWidget()
+        self._controls = QVBoxLayout(panel)
+        self._controls.setContentsMargins(20, 12, 20, 20)
+        self._controls.setSpacing(11)
+        scroll.setWidget(panel)
+        return scroll
 
-        self._viewer = ImageViewer()
-        layout.addWidget(self._viewer, 1)
+    def _switch_section(self, section: str) -> None:
+        if self._section == "Video" and section != "Video":
+            self._stop_video()
+        self._section = section
 
-        layout.addWidget(self._build_inspector())
+        for name, button in self._navigation.items():
+            button.setProperty("active", name == section)
+            button.style().unpolish(button)
+            button.style().polish(button)
 
-        return content
+        self._workspace_title.setText(f"{section} workspace")
+        self._render_controls()
 
-    def _build_inspector(self) -> QFrame:
-        inspector = QFrame()
-        inspector.setObjectName("inspector")
-        inspector.setFixedWidth(320)
+    def _clear_controls(self) -> None:
+        while self._controls.count():
+            item = self._controls.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
 
-        layout = QVBoxLayout(inspector)
-        layout.setContentsMargins(22, 4, 22, 4)
-        layout.setSpacing(14)
+    def _text(self, value: str, object_name: str = "muted") -> QLabel:
+        label = QLabel(value)
+        label.setObjectName(object_name)
+        label.setWordWrap(True)
+        self._controls.addWidget(label)
+        return label
 
-        title = QLabel("Image info")
-        title.setObjectName("sectionTitle")
-        layout.addWidget(title)
+    def _button(self, title: str, callback, primary: bool = False) -> QPushButton:
+        button = QPushButton(title)
+        if primary:
+            button.setObjectName("primaryButton")
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(callback)
+        self._controls.addWidget(button)
+        return button
 
-        self._path_label = QLabel("No image loaded")
-        self._path_label.setObjectName("muted")
-        self._path_label.setWordWrap(True)
-        layout.addWidget(self._path_label)
-        layout.addSpacing(8)
+    def _selector(self, options: tuple[tuple[str, str], ...], callback) -> QComboBox:
+        combo = QComboBox()
+        for label, value in options:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(lambda _: callback(combo.currentData()))
+        self._controls.addWidget(combo)
+        return combo
 
-        fields = (
-            ("resolution", "Resolution"),
-            ("file_size", "File size"),
-            ("format", "Format"),
-            ("color_mode", "Color mode"),
-            ("color_depth", "Color depth"),
-            ("channels", "Channels"),
+    def _slider(self, title: str, minimum: int, maximum: int, value: int, callback) -> QSlider:
+        label = self._text(f"{title}: {value}", "metaValue")
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(minimum, maximum)
+        slider.setValue(value)
+
+        def on_change(next_value: int) -> None:
+            label.setText(f"{title}: {next_value}")
+            callback(next_value)
+
+        slider.valueChanged.connect(on_change)
+        self._controls.addWidget(slider)
+        return slider
+
+    def _render_controls(self) -> None:
+        self._clear_controls()
+        self._text(self._section, "sectionTitle")
+        self._text("Choose a tool. The original image remains unchanged.")
+
+        if self._section == "Image":
+            self._panel_image()
+        elif self._section == "Color":
+            self._panel_color()
+        elif self._section == "Adjustments":
+            self._panel_adjustments()
+        elif self._section == "Histogram":
+            self._panel_histogram()
+        elif self._section == "Morphology":
+            self._panel_morphology()
+        elif self._section == "Filters":
+            self._panel_filters()
+        elif self._section == "Features":
+            self._panel_features()
+        elif self._section == "Compare":
+            self._panel_compare()
+        elif self._section == "Video":
+            self._panel_video()
+
+        self._controls.addStretch()
+
+    def _panel_image(self) -> None:
+        document = self._document
+        if document is None:
+            self._text("No image loaded. Click Open image or drag a file into the window.")
+            return
+
+        self._text(document.path.name, "metaValue")
+        for label, value in (
+            ("Resolution", document.resolution_text),
+            ("Disk size", document.file_size_text),
+            ("Format", document.file_format),
+            ("Color mode", document.color_mode),
+            ("Bit depth", f"{document.color_depth} bit"),
+            ("Channels", document.channels_text),
+        ):
+            self._text(f"{label}:  {value}")
+
+        self._button("Restore original", self._reset_preview)
+        self._button("Close image", self._clear_image)
+
+    def _panel_color(self) -> None:
+        self._text("Click a pixel in the ORIGINAL image to inspect its values.")
+        self._button("Convert image to grayscale", lambda: self._process("grayscale"))
+
+        if self._source is None or self._selected_pixel is None:
+            self._text("Pixel not selected.")
+            return
+
+        x, y = self._selected_pixel
+        color = tuple(int(n) for n in self._source[y, x])
+        values = pixel_colors(color)
+        self._text(f"Selected pixel · x={x}, y={y}", "metaValue")
+        swatch = QLabel("                         ")
+        swatch.setFixedHeight(34)
+        swatch.setStyleSheet(
+            f"background-color: rgb({color[0]}, {color[1]}, {color[2]});"
+            "border: 1px solid #454b57; border-radius: 8px;"
         )
+        self._controls.addWidget(swatch)
 
-        for key, label in fields:
-            row = QWidget()
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
+        for model, value in values.items():
+            self._text(model, "metaValue")
+            self._text(value)
 
-            name_label = QLabel(label)
-            name_label.setObjectName("metaName")
+        self._text("CMYK is a simple device-independent approximation; LAB uses sRGB / D65.")
 
-            value_label = QLabel("—")
-            value_label.setObjectName("metaValue")
-            value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            value_label.setWordWrap(True)
+    def _panel_adjustments(self) -> None:
+        self._text("Live brightness, contrast, and saturation adjustments.")
+        self._slider("Brightness", -100, 100, self._brightness, self._change_brightness)
+        self._slider("Contrast %", 0, 200, self._contrast, self._change_contrast)
+        self._slider("Saturation %", 0, 200, self._saturation, self._change_saturation)
+        self._button("Restore adjustments", self._restore_adjustments)
+        self._text("Grayscale correction", "metaValue")
+        self._button("Linear contrast stretch", lambda: self._process("linear"))
+        self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
+        self._button("Apply nonlinear gamma correction", lambda: self._process("gamma"))
 
-            row_layout.addWidget(name_label)
-            row_layout.addStretch()
-            row_layout.addWidget(value_label)
+    def _panel_histogram(self) -> None:
+        self._text("Compare pixel intensity distributions before and after processing.")
+        self._button("Open RGB histograms", self._show_histograms, primary=True)
+        self._text("Switch between RGB, R, G, B, and luminance inside the chart.")
 
-            self._meta_values[key] = value_label
-            layout.addWidget(row)
+    def _panel_morphology(self) -> None:
+        self._text("Automatic Otsu binary thresholding before morphology.")
+        self._selector(_MORPHOLOGY, self._choose_morph)
+        self._slider("Kernel size", 1, 21, self._morph_k, self._change_morph_kernel)
+        self._button("Restore original", self._reset_preview)
 
-        layout.addStretch()
+    def _panel_filters(self) -> None:
+        self._text("Spatial filters and edge detectors.")
+        self._selector(_FILTERS, self._choose_filter)
+        self._slider("Kernel size", 3, 31, self._filter_k, self._change_filter_kernel)
+        self._slider("Canny lower threshold", 0, 254, self._low, self._change_low)
+        self._slider("Canny upper threshold", 1, 255, self._high, self._change_high)
+        self._button("Restore original", self._reset_preview)
 
-        self._close_button = QPushButton("Close image")
-        self._close_button.setEnabled(False)
-        self._close_button.clicked.connect(self._clear_image)
-        layout.addWidget(self._close_button)
+    def _panel_features(self) -> None:
+        self._text("Highlight detected corners and keypoints.")
+        self._selector(_FEATURES, self._choose_feature)
+        self._slider("Sensitivity", 1, 80, self._sensitivity, self._change_sensitivity)
+        self._button("Restore original", self._reset_preview)
 
-        return inspector
+    def _panel_compare(self) -> None:
+        self._text("Load 3–10 images to find the two most similar ones using dHash.")
+        self._button("Choose 3–10 images", self._compare_images, primary=True)
+        self._text("The lowest 64-bit difference-hash distance wins. "
+                   "This is perceptual similarity, not exact object recognition.")
+
+    def _panel_video(self) -> None:
+        self._text("Analyze a video frame by frame.")
+        self._selector(
+            (("Background subtraction (MOG2)", "background"),
+             ("Blur moving objects", "moving_blur")),
+            self._choose_video_operation,
+        )
+        self._button("Open video and play", self._open_video, primary=True)
+        self._button("Stop video", self._stop_video)
+        self._text("Supports common formats such as MP4, AVI, and MOV if your "
+                   "OpenCV installation includes the required codec.")
+
+    def _change_brightness(self, value: int) -> None:
+        self._brightness = value
+        self._process("adjust")
+
+    def _change_contrast(self, value: int) -> None:
+        self._contrast = value
+        self._process("adjust")
+
+    def _change_saturation(self, value: int) -> None:
+        self._saturation = value
+        self._process("adjust")
+
+    def _change_gamma(self, value: int) -> None:
+        self._gamma = value / 100.0
+        if self._operation == "gamma":
+            self._process("gamma")
+
+    def _restore_adjustments(self) -> None:
+        self._brightness, self._contrast, self._saturation = 0, 100, 100
+        self._reset_preview()
+        self._render_controls()
+
+    def _choose_morph(self, operation: str) -> None:
+        self._process(operation)
+
+    def _change_morph_kernel(self, value: int) -> None:
+        self._morph_k = value
+        if self._operation in {value for _, value in _MORPHOLOGY}:
+            self._process(self._operation)
+
+    def _choose_filter(self, operation: str) -> None:
+        self._process(operation)
+
+    def _change_filter_kernel(self, value: int) -> None:
+        self._filter_k = value
+        if self._operation in {value for _, value in _FILTERS}:
+            self._process(self._operation)
+
+    def _change_low(self, value: int) -> None:
+        self._low = value
+        if self._operation == "canny":
+            self._process("canny")
+
+    def _change_high(self, value: int) -> None:
+        self._high = value
+        if self._operation == "canny":
+            self._process("canny")
+
+    def _choose_feature(self, operation: str) -> None:
+        self._process(operation)
+
+    def _change_sensitivity(self, value: int) -> None:
+        self._sensitivity = value
+        if self._operation in {value for _, value in _FEATURES}:
+            self._process(self._operation)
+
+    def _process(self, operation: str) -> None:
+        if self._source is None:
+            self.statusBar().showMessage("Open an image first")
+            return
+        try:
+            output = run_tool(
+                self._source, operation,
+                brightness=self._brightness,
+                contrast=self._contrast,
+                saturation=self._saturation,
+                kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
+                low=self._low,
+                high=self._high,
+                sensitivity=self._sensitivity,
+                gamma=self._gamma,
+            )
+            self._result = output
+            self._operation = operation
+            self._result_view.set_array(output)
+            self._result_view.set_caption(f"Processed · {operation}")
+            self.statusBar().showMessage(f"Applied: {operation}")
+        except (cv2.error, ValueError, OverflowError) as exc:
+            QMessageBox.warning(self, "Processing error", str(exc))
+
+    def _reset_preview(self) -> None:
+        if self._source is not None:
+            self._process("original")
+
+    def _on_pixel_clicked(self, x: int, y: int) -> None:
+        if self._source is None:
+            return
+        self._selected_pixel = (x, y)
+        color = self._source[y, x].tolist()
+        self.statusBar().showMessage(f"Pixel ({x}, {y}) · RGB {color}")
+        if self._section != "Color":
+            self._switch_section("Color")
+        else:
+            self._render_controls()
 
     def open_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
-            self,
-            "Open image",
-            "",
+            self, "Open image", "",
             "Images (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp);;All files (*.*)",
         )
         if path:
@@ -252,60 +517,155 @@ class MainWindow(QMainWindow):
     def _load_image(self, path: Path) -> None:
         try:
             document = ImageDocument.load(path)
-            self._viewer.set_image(path)
+            source = load_rgb(str(path))
         except (FileNotFoundError, OSError, ValueError) as exc:
-            QMessageBox.critical(
-                self,
-                "Could not open image",
-                f"PixelScope could not open this file.\n\n{exc}",
-            )
+            QMessageBox.critical(self, "Could not open image", str(exc))
             return
 
+        self._stop_video()
         self._document = document
-        self._path_label.setText(document.path.name)
-        self._path_label.setToolTip(str(document.path))
-
-        self._meta_values["resolution"].setText(document.resolution_text)
-        self._meta_values["file_size"].setText(document.file_size_text)
-        self._meta_values["format"].setText(document.file_format)
-        self._meta_values["color_mode"].setText(document.color_mode)
-        self._meta_values["color_depth"].setText(f"{document.color_depth} bit")
-        self._meta_values["channels"].setText(document.channels_text)
-
-        self._close_button.setEnabled(True)
+        self._source = source
+        self._result = source.copy()
+        self._selected_pixel = None
+        self._operation = "original"
+        self._source_view.set_array(source)
+        self._result_view.set_array(source)
+        self._result_view.set_caption("Processed · original")
+        self._save_action.setEnabled(True)
+        self._save_button.setEnabled(True)
+        self._render_controls()
         self.statusBar().showMessage(
             f"{document.path.name} · {document.resolution_text} · {document.file_format}"
         )
 
     def _clear_image(self) -> None:
+        self._stop_video()
         self._document = None
-        self._viewer.clear_image()
-        self._path_label.setText("No image loaded")
-        self._path_label.setToolTip("")
-
-        for label in self._meta_values.values():
-            label.setText("—")
-
-        self._close_button.setEnabled(False)
+        self._source = None
+        self._result = None
+        self._selected_pixel = None
+        self._operation = "original"
+        self._source_view.clear_image()
+        self._result_view.clear_image()
+        self._save_button.setEnabled(False)
+        self._save_action.setEnabled(False)
+        self._render_controls()
         self.statusBar().showMessage("Ready")
 
+    def save_result(self) -> None:
+        if self._result is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save processed image", "pixelscope-output.png",
+            "PNG image (*.png);;JPEG image (*.jpg);;BMP image (*.bmp)",
+        )
+        if not path:
+            return
+        try:
+            Image.fromarray(self._result).save(path)
+            self.statusBar().showMessage(f"Saved: {path}")
+        except (OSError, ValueError) as exc:
+            QMessageBox.warning(self, "Could not save image", str(exc))
+
+    def _show_histograms(self) -> None:
+        if self._source is None or self._result is None:
+            self.statusBar().showMessage("Open an image first")
+            return
+        dialog = HistogramDialog(self._source, self._result, self)
+        dialog.exec()
+
+    def _compare_images(self) -> None:
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Choose 3–10 images", "",
+            "Images (*.png *.jpg *.jpeg *.bmp *.gif *.tif *.tiff *.webp)",
+        )
+        if not paths:
+            return
+        if len(paths) < 3 or len(paths) > 10:
+            QMessageBox.information(self, "Image count", "Choose between 3 and 10 images.")
+            return
+        try:
+            pair = most_similar([Path(p) for p in paths])
+            dialog = SimilarityDialog(pair, self)
+            dialog.exec()
+        except (OSError, ValueError, cv2.error) as exc:
+            QMessageBox.warning(self, "Image comparison failed", str(exc))
+
+    def _choose_video_operation(self, operation: str) -> None:
+        if operation == self._video_operation:
+            return
+        self._video_operation = operation
+        self._video_processor = VideoProcessor()
+
+    def _open_video(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open video", "",
+            "Video files (*.mp4 *.avi *.mov *.mkv *.webm);;All files (*.*)",
+        )
+        if not path:
+            return
+        self._stop_video()
+        capture = cv2.VideoCapture(path)
+        if not capture.isOpened():
+            capture.release()
+            QMessageBox.warning(self, "Video error", "Unable to open this video or codec.")
+            return
+        self._capture = capture
+        self._video_processor = VideoProcessor()
+        fps = capture.get(cv2.CAP_PROP_FPS)
+        fps = fps if np.isfinite(fps) and fps > 0 else 25
+        self._video_timer.start(max(16, round(1000 / min(fps, 60))))
+        self._advance_video()
+
+    def _advance_video(self) -> None:
+        if self._capture is None or self._video_processor is None:
+            self._stop_video()
+            return
+
+        ok, bgr = self._capture.read()
+        if not ok:
+            self._stop_video()
+            self.statusBar().showMessage("Video playback finished")
+            return
+
+        rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+        processed = self._video_processor.process(rgb, self._video_operation)
+        self._source_view.set_array(rgb)
+        self._result_view.set_array(processed)
+        self._result_view.set_caption(f"Video · {self._video_operation}")
+        self.statusBar().showMessage(f"Video · {self._video_operation}")
+
+    def _stop_video(self) -> None:
+        self._video_timer.stop()
+        if self._capture is not None:
+            self._capture.release()
+            self._capture = None
+        self._video_processor = None
+        if hasattr(self, "_source_view") and self._source is not None:
+            self._source_view.set_array(self._source)
+            if self._result is not None:
+                self._result_view.set_array(self._result)
+                self._result_view.set_caption(f"Processed · {self._operation}")
+
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        urls = event.mimeData().urls()
-        if any(self._is_supported_image(Path(url.toLocalFile())) for url in urls):
+        if any(
+            Path(url.toLocalFile()).suffix.lower() in _IMAGE_SUFFIXES
+            for url in event.mimeData().urls() if url.isLocalFile()
+        ):
             event.acceptProposedAction()
         else:
             event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:
         for url in event.mimeData().urls():
-            path = Path(url.toLocalFile())
-            if self._is_supported_image(path):
-                self._load_image(path)
-                event.acceptProposedAction()
-                return
-
+            if url.isLocalFile():
+                path = Path(url.toLocalFile())
+                if path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES:
+                    self._load_image(path)
+                    event.acceptProposedAction()
+                    return
         event.ignore()
 
-    @staticmethod
-    def _is_supported_image(path: Path) -> bool:
-        return path.is_file() and path.suffix.lower() in _IMAGE_SUFFIXES
+    def closeEvent(self, event) -> None:
+        self._stop_video()
+        super().closeEvent(event)
