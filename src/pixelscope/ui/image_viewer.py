@@ -83,6 +83,12 @@ class ImageViewer(QFrame):
         self._canvas.setText("")
         self._refresh()
 
+    def set_placeholder(self, message: str) -> None:
+        self._pixmap = QPixmap()
+        self._canvas.image_size = None
+        self._canvas.clear()
+        self._canvas.setText(message)
+
     def clear_image(self) -> None:
         self._pixmap = QPixmap()
         self._canvas.clear()
