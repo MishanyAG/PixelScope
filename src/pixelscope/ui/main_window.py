@@ -620,7 +620,7 @@ class MainWindow(QMainWindow):
             self._video_operation,
         )
         self._slider(
-            "Motion blur kernel", 15, 121,
+            "Motion blur kernel (live)", 15, 121,
             self._video_blur, self._change_video_blur,
         )
         self._button("Open video and play", self._open_video, primary=True)
@@ -635,6 +635,7 @@ class MainWindow(QMainWindow):
             "Camera movement can make furniture and walls appear to move. "
             "Use a fixed camera; the first frames help train the background."
         )
+        self._text("In Blur moving objects mode, the kernel updates on the next frame as you move the slider. No video reload is needed.")
         self._text("Playback loops automatically until you press Stop video.")
 
     def _change_video_blur(self, value: int) -> None:
