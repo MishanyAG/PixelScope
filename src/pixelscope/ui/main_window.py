@@ -97,7 +97,7 @@ class MainWindow(QMainWindow):
         self._capture: cv2.VideoCapture | None = None
         self._video_processor: VideoProcessor | None = None
         self._video_operation = "background"
-        self._video_blur = 71
+        self._video_blur = 101
         self._video_timer = QTimer(self)
         self._video_timer.timeout.connect(self._advance_video)
 
@@ -805,9 +805,12 @@ class MainWindow(QMainWindow):
 
         # Bound processing resolution for a responsive side-by-side video UI.
         height, width = bgr.shape[:2]
-        if width > 960:
+        largest = max(height, width)
+        if largest > 960:
+            scale = 960.0 / largest
             bgr = cv2.resize(
-                bgr, (960, round(height * 960 / width)), interpolation=cv2.INTER_AREA
+                bgr, (max(1, round(width * scale)), max(1, round(height * scale))),
+                interpolation=cv2.INTER_AREA,
             )
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         processed = self._video_processor.process(rgb, self._video_operation)
