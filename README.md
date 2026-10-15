@@ -9,16 +9,16 @@ PixelScope is a Python desktop app with a dark Qt UI for exploring color spaces,
 | Workspace | Tools |
 |---|---|
 | **Image** | Open PNG/JPG/BMP/GIF/TIFF/WebP, drag & drop, inspect image metadata, preview original vs result, export output |
-| **Color** | Click a pixel and inspect RGB, CMYK, HSL, LAB, HSV and YCbCr; convert image to grayscale |
+| **Color** | Click either the original or processed image to inspect RGB, CMYK, HSL, LAB, HSV and YCbCr; convert image to grayscale |
 | **Adjustments** | Brightness, contrast, saturation, linear grayscale contrast stretch and nonlinear gamma correction |
-| **Histogram** | RGB/R/G/B/luminance graphs with side-by-side before/after comparison |
+| **Histogram** | Embedded original/processed histograms below the two images, with an RGB/R/G/B/luminance switch |
 | **Morphology** | Erosion, dilation, opening, closing, morphological gradient (automatic Otsu binarization) |
 | **Filters** | Color inversion, sharpen, motion blur, emboss, median, Canny edges, Roberts edges |
 | **Features** | Harris, SIFT and FAST detectors |
 | **Compare** | Find two most similar images among 3–10 using difference hashes |
 | **Video** | Dedicated video workspace: color foreground extraction, binary motion mask, and adjustable blur of moving objects |
 
-Image tools **build on the currently edited result**, using replayable edit history. For example, grayscale → brightness keeps the image grayscale. Selecting an operation or moving a slider applies it immediately, without an extra Apply button or repeatedly stacking the same slider effect. Each editing tab has a **Reset** button that removes only edits from that tab, then recomputes the remaining edits in their original order. Reset also returns that tab's controls to their defaults. The Image tab has a separate, clearly labeled **Reset all edits** command with confirmation. The original file is never overwritten unless you explicitly export an image to a chosen path.
+Image tools **build on the currently edited result**, using replayable edit history. For example, grayscale → brightness keeps the image grayscale. In Morphology, Filters and Features, every tool has its own **expandable settings and ON/OFF checkbox**. Opening settings changes nothing, enabling adds one effect, and disabling removes just that effect. Multiple effects can be combined deliberately and tuned independently. Adjustment sliders still update immediately without stacking the same effect repeatedly. Each editing tab has a **Reset** button that removes only edits from that tab, then recomputes the remaining edits in their original order. Reset also returns that tab's controls to their defaults. The Image tab has a separate, clearly labeled **Reset all edits** command with confirmation. The original file is never overwritten unless you explicitly export an image to a chosen path.
 
 ## Run on Windows
 
@@ -43,7 +43,7 @@ git pull
 .\.venv\Scripts\python.exe main.py
 ```
 
-**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tools. Image processing tools are disabled until an image is loaded. Compare and Video have independent viewers, and image Open/Save controls disappear there. The redundant File/View menu bar is hidden.
+**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. On the Color tab, click either image to sample that pixel. Pixel sampling is inactive on all other tabs. Use the left navigation to switch tools. Image processing tools are disabled until an image is loaded. Compare and Video have independent viewers, and image Open/Save controls disappear there. The redundant File/View menu bar is hidden.
 
 ## Tests
 
@@ -89,6 +89,6 @@ PixelScope/
 - Large source images and video frames may require substantial CPU/RAM. PySide6 tools run on the GUI thread in the current prototype, so very large inputs can reduce responsiveness.
 - Tests validate algorithm outputs and the main window under an offscreen Qt runner; interactive Windows acceptance testing is still recommended.
 
-**Status:** v0.4 — instant edits, section resets and looping video.
+**Status:** v0.5 — independent effect cards, dual pixel sampling, embedded histograms.
 
 Built by Mikhail Aleshin.
