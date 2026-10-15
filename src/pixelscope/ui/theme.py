@@ -131,4 +131,37 @@ QMenu {
     background-color: #151820;
     border: 1px solid #2a2f3a;
 }
+
+QFrame#toolCard {
+    background-color: #1a1e27;
+    border: 1px solid #343b4a;
+    border-radius: 9px;
+}
+
+QFrame#toolCard:hover {
+    border-color: #4a566c;
+}
+
+QFrame#toolCard QCheckBox {
+    background: transparent;
+    font-weight: 600;
+    color: #e7eaf0;
+    spacing: 8px;
+}
+
+QFrame#toolCard QCheckBox::indicator {
+    width: 17px;
+    height: 17px;
+}
+
+QFrame#toolCard QPushButton {
+    background-color: #252b36;
+    border-radius: 5px;
+    padding: 2px;
+}
+
+QWidget#histogramPanel {
+    background-color: #12141a;
+    border-top: 1px solid #292d38;
+}
 """
