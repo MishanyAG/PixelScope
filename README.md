@@ -13,7 +13,7 @@ PixelScope is a Python desktop app with a dark Qt UI for exploring color spaces,
 | **Adjustments** | Brightness, contrast, saturation, linear grayscale contrast stretch and nonlinear gamma correction |
 | **Histogram** | RGB/R/G/B/luminance graphs with side-by-side before/after comparison |
 | **Morphology** | Erosion, dilation, opening, closing, morphological gradient (automatic Otsu binarization) |
-| **Filters** | Sharpen, motion blur, emboss, median, Canny edges, Roberts edges |
+| **Filters** | Color inversion, sharpen, motion blur, emboss, median, Canny edges, Roberts edges |
 | **Features** | Harris, SIFT and FAST detectors |
 | **Compare** | Find two most similar images among 3–10 using difference hashes |
 | **Video** | MOG2 background subtraction and Gaussian blur of moving objects |
@@ -75,6 +75,11 @@ PixelScope/
         ├── dialogs.py
         └── theme.py
 ```
+
+## Course materials
+
+- [Theoretical assignment (Russian, all 11 questions)](docs/theory.md)
+- [Oral defense quick reference (Russian)](docs/defense.md)
 
 ## Notes and limitations
 
