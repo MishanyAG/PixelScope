@@ -18,7 +18,7 @@ PixelScope is a Python desktop app with a dark Qt UI for exploring color spaces,
 | **Compare** | Find two most similar images among 3–10 using difference hashes |
 | **Video** | Dedicated video workspace: color foreground extraction, binary motion mask, and adjustable blur of moving objects |
 
-Image tools **build on the currently edited result**. For example, grayscale → brightness keeps the image grayscale. Slider changes recompute their own live preview without repeatedly stacking the same operation. The original file is never overwritten unless you explicitly export an image to a chosen path.
+Image tools **build on the currently edited result**, using replayable edit history. For example, grayscale → brightness keeps the image grayscale. Selecting an operation or moving a slider applies it immediately, without an extra Apply button or repeatedly stacking the same slider effect. Each editing tab has a **Reset** button that removes only edits from that tab, then recomputes the remaining edits in their original order. Reset also returns that tab's controls to their defaults. The Image tab has a separate, clearly labeled **Reset all edits** command with confirmation. The original file is never overwritten unless you explicitly export an image to a chosen path.
 
 ## Run on Windows
 
@@ -43,7 +43,7 @@ git pull
 .\.venv\Scripts\python.exe main.py
 ```
 
-**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tools. Image processing tools are disabled until an image is loaded. Compare and Video have independent viewers, and image Open/Save controls disappear there.
+**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tools. Image processing tools are disabled until an image is loaded. Compare and Video have independent viewers, and image Open/Save controls disappear there. The redundant File/View menu bar is hidden.
 
 ## Tests
 
@@ -84,11 +84,11 @@ PixelScope/
 ## Notes and limitations
 
 - CMYK conversion shows an **approximation** without a printer ICC profile; LAB assumes sRGB with the D65 reference white.
-- The video tools depend on the file codecs available in the installed OpenCV build.
+- Video processing is motion-based, not dog/person detection. MOG2 estimates a background over time; moving the camera can cause furniture and walls to be detected as foreground. Video automatically loops and resets background training at the beginning of each replay. Codecs still depend on the installed OpenCV build.
 - dHash ranks overall visual similarity; it is not neural semantic image matching.
 - Large source images and video frames may require substantial CPU/RAM. PySide6 tools run on the GUI thread in the current prototype, so very large inputs can reduce responsiveness.
 - Tests validate algorithm outputs and the main window under an offscreen Qt runner; interactive Windows acceptance testing is still recommended.
 
-**Status:** v0.3 — cumulative edits and independent workspaces.
+**Status:** v0.4 — instant edits, section resets and looping video.
 
 Built by Mikhail Aleshin.
