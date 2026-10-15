@@ -84,6 +84,9 @@ class MainWindow(QMainWindow):
         self._low = 70
         self._high = 150
         self._sensitivity = 20
+        self._morph_operation = "erode"
+        self._filter_operation = "sharpen"
+        self._feature_operation = "harris"
 
         self._capture: cv2.VideoCapture | None = None
         self._video_processor: VideoProcessor | None = None
@@ -263,10 +266,14 @@ class MainWindow(QMainWindow):
         self._controls.addWidget(button)
         return button
 
-    def _selector(self, options: tuple[tuple[str, str], ...], callback) -> QComboBox:
+    def _selector(self, options: tuple[tuple[str, str], ...], callback, selected=None) -> QComboBox:
         combo = QComboBox()
         for label, value in options:
             combo.addItem(label, value)
+        if selected is not None:
+            index = combo.findData(selected)
+            if index >= 0:
+                combo.setCurrentIndex(index)
         combo.currentIndexChanged.connect(lambda _: callback(combo.currentData()))
         self._controls.addWidget(combo)
         return combo
@@ -375,22 +382,25 @@ class MainWindow(QMainWindow):
 
     def _panel_morphology(self) -> None:
         self._text("Automatic Otsu binary thresholding before morphology.")
-        self._selector(_MORPHOLOGY, self._choose_morph)
+        self._selector(_MORPHOLOGY, self._choose_morph, self._morph_operation)
         self._slider("Kernel size", 1, 21, self._morph_k, self._change_morph_kernel)
+        self._button("Apply selected morphology", lambda: self._process(self._morph_operation), primary=True)
         self._button("Restore original", self._reset_preview)
 
     def _panel_filters(self) -> None:
         self._text("Spatial filters and edge detectors.")
-        self._selector(_FILTERS, self._choose_filter)
+        self._selector(_FILTERS, self._choose_filter, self._filter_operation)
         self._slider("Kernel size", 3, 31, self._filter_k, self._change_filter_kernel)
         self._slider("Canny lower threshold", 0, 254, self._low, self._change_low)
         self._slider("Canny upper threshold", 1, 255, self._high, self._change_high)
+        self._button("Apply selected filter", lambda: self._process(self._filter_operation), primary=True)
         self._button("Restore original", self._reset_preview)
 
     def _panel_features(self) -> None:
         self._text("Highlight detected corners and keypoints.")
-        self._selector(_FEATURES, self._choose_feature)
+        self._selector(_FEATURES, self._choose_feature, self._feature_operation)
         self._slider("Sensitivity", 1, 80, self._sensitivity, self._change_sensitivity)
+        self._button("Detect keypoints", lambda: self._process(self._feature_operation), primary=True)
         self._button("Restore original", self._reset_preview)
 
     def _panel_compare(self) -> None:
@@ -405,6 +415,7 @@ class MainWindow(QMainWindow):
             (("Background subtraction (MOG2)", "background"),
              ("Blur moving objects", "moving_blur")),
             self._choose_video_operation,
+            self._video_operation,
         )
         self._button("Open video and play", self._open_video, primary=True)
         self._button("Stop video", self._stop_video)
@@ -434,6 +445,7 @@ class MainWindow(QMainWindow):
         self._render_controls()
 
     def _choose_morph(self, operation: str) -> None:
+        self._morph_operation = operation
         self._process(operation)
 
     def _change_morph_kernel(self, value: int) -> None:
@@ -442,6 +454,7 @@ class MainWindow(QMainWindow):
             self._process(self._operation)
 
     def _choose_filter(self, operation: str) -> None:
+        self._filter_operation = operation
         self._process(operation)
 
     def _change_filter_kernel(self, value: int) -> None:
@@ -460,6 +473,7 @@ class MainWindow(QMainWindow):
             self._process("canny")
 
     def _choose_feature(self, operation: str) -> None:
+        self._feature_operation = operation
         self._process(operation)
 
     def _change_sensitivity(self, value: int) -> None:
