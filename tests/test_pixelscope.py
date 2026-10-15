@@ -628,3 +628,95 @@ def test_saving_to_source_path_is_blocked(sample, app, monkeypatch):
     assert "Original image" in warnings[0][1]
     assert np.array_equal(np.asarray(Image.open(path).convert("RGB")), rgb)
     window.close()
+
+
+def test_live_video_kernel_changes_on_next_frame_without_reopening(sample, app):
+    """Exercise the actual slider and next-frame route using a fake capture."""
+    _, rgb = sample
+
+    class RepeatingCapture:
+        def __init__(self, source):
+            self.source = source
+            self.frames = 0
+            self.released = False
+
+        def read(self):
+            self.frames += 1
+            return True, cv2.cvtColor(self.source, cv2.COLOR_RGB2BGR)
+
+        def release(self):
+            self.released = True
+
+    class KernelSpy:
+        def __init__(self, initial):
+            self.blur_size = initial
+            self.used = []
+
+        def process(self, frame, operation):
+            self.used.append((self.blur_size, operation))
+            return np.full_like(frame, self.blur_size)
+
+    window = MainWindow()
+    window._switch_section("Video")
+    window._choose_video_operation("moving_blur")
+
+    cap = RepeatingCapture(rgb)
+    spy = KernelSpy(window._video_blur)
+    window._capture = cap
+    window._video_processor = spy
+    old_identity = id(spy)
+
+    # First video frame uses the currently selected kernel.
+    window._advance_video()
+    assert spy.used[-1] == (101, "moving_blur")
+
+    # The real Qt slider changes the running processor, no VideoCapture restart.
+    from PySide6.QtWidgets import QSlider
+    sliders = window._controls.parentWidget().findChildren(QSlider)
+    assert len(sliders) == 1
+    slider = sliders[0]
+    slider.setValue(15)
+    assert window._video_blur == 15
+    assert spy.blur_size == 15
+    assert id(window._video_processor) == old_identity
+    assert window._capture is cap
+
+    window._advance_video()
+    assert spy.used[-1] == (15, "moving_blur")
+    assert cap.frames == 2
+    assert np.asarray(window._video_result_view._pixmap.toImage().bits()).size > 0
+
+    # The slider can also change while in the foreground-only mode;
+    # the value persists and takes effect upon switching back to blur.
+    window._choose_video_operation("background")
+    slider.setValue(121)
+    window._advance_video()
+    assert spy.used[-1] == (121, "background")
+    window._choose_video_operation("moving_blur")
+    window._advance_video()
+    assert spy.used[-1] == (121, "moving_blur")
+    assert window._capture is cap
+
+    window._stop_video()
+    assert cap.released
+    window.close()
+
+
+def test_blur_kernel_strength_affects_pixels_after_background_training():
+    """Larger odd Gaussian kernels must produce a visibly different image."""
+    background = np.full((180, 180, 3), 40, dtype=np.uint8)
+    moving = background.copy()
+    moving[62:118, 62:118] = (230, 230, 230)
+
+    def frame_with_kernel(size):
+        processor = VideoProcessor(blur_size=size)
+        for _ in range(35):
+            processor.process(background, "mask")
+        return processor.process(moving, "moving_blur")
+
+    small = frame_with_kernel(15)
+    large = frame_with_kernel(121)
+    assert small.shape == large.shape == moving.shape
+    assert not np.array_equal(small, large)
+    # Near the moving square's center, the large blur includes more background.
+    assert int(large[90, 90, 0]) < int(small[90, 90, 0])
