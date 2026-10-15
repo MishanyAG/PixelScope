@@ -26,37 +26,37 @@ Requirements: **Python 3.11+** with an internet connection for dependency instal
 
 Open PowerShell in a chosen development directory and run:
 
-\`\`\`powershell
+```powershell
 git clone https://github.com/MishanyAG/PixelScope.git
 cd PixelScope
 
 py -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py
-\`\`\`
+```
 
 If you've already cloned the repository, update your local copy instead:
 
-\`\`\`powershell
+```powershell
 git pull
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe main.py
-\`\`\`
+```
 
 **Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tool categories.
 
 ## Tests
 
-\`\`\`powershell
+```powershell
 .\.venv\Scripts\python.exe -m pip install pytest
 .\.venv\Scripts\python.exe -m pytest -q
-\`\`\`
+```
 
 Automated smoke tests run on GitHub Actions with the Qt offscreen platform.
 
 ## Project layout
 
-\`\`\`text
+```text
 PixelScope/
 ├── main.py
 ├── requirements.txt
@@ -74,7 +74,7 @@ PixelScope/
         ├── image_viewer.py
         ├── dialogs.py
         └── theme.py
-\`\`\`
+```
 
 ## Notes and limitations
 
