@@ -412,3 +412,109 @@ def test_video_loops_when_reaching_last_frame(sample, app):
     window._stop_video()
     assert cap.released
     window.close()
+
+
+
+def test_tool_cards_toggle_without_accidental_stacking(sample, app):
+    path, original = sample
+    window = MainWindow()
+    window._load_image(path)
+    window._switch_section("Morphology")
+    assert len(window._pipeline.steps) == 0
+    erode = window._tool_cards["erode"]
+    dilate = window._tool_cards["dilate"]
+    assert not erode.enabled_box.isChecked()
+    assert not dilate.enabled_box.isChecked()
+
+    # Expanding the settings must never apply an effect.
+    erode.details_button.click()
+    assert erode.details.isVisible() is False or erode._expanded
+    assert len(window._pipeline.steps) == 0
+
+    erode.enabled_box.setChecked(True)
+    assert [s.operation for s in window._pipeline.steps] == ["erode"]
+    once = window._result.copy()
+
+    # The other checkbox is independent.
+    dilate.enabled_box.setChecked(True)
+    assert [s.operation for s in window._pipeline.steps] == ["erode", "dilate"]
+
+    # Re-tuning erosion edits the existing step; it doesn't append a new one.
+    erode.sliders["kernel_size"].setValue(9)
+    assert len(window._pipeline.steps) == 2
+    assert window._pipeline.steps[0].parameters["kernel_size"] == 9
+
+    dilate.enabled_box.setChecked(False)
+    assert [s.operation for s in window._pipeline.steps] == ["erode"]
+    assert not np.array_equal(window._result, original)
+    # Disabling all tools brings back the exact original.
+    erode.enabled_box.setChecked(False)
+    assert np.array_equal(window._result, original)
+    window.close()
+
+
+def test_filters_and_features_have_independent_switches(sample, app):
+    path, _ = sample
+    window = MainWindow()
+    window._load_image(path)
+    window._switch_section("Filters")
+    sharpen = window._tool_cards["sharpen"]
+    invert = window._tool_cards["invert"]
+    sharpen.enabled_box.setChecked(True)
+    invert.enabled_box.setChecked(True)
+    assert len(window._pipeline.steps) == 2
+    sharpen.enabled_box.setChecked(False)
+    assert [s.operation for s in window._pipeline.steps] == ["invert"]
+
+    window._switch_section("Features")
+    sift = window._tool_cards["sift"]
+    sift.details_button.click()
+    assert len(window._pipeline.steps) == 1
+    sift.enabled_box.setChecked(True)
+    assert [s.operation for s in window._pipeline.steps] == ["invert", "sift"]
+    window._reset_current_section("Features")
+    assert [s.operation for s in window._pipeline.steps] == ["invert"]
+    assert not window._tool_cards["sift"].enabled_box.isChecked()
+    window.close()
+
+
+def test_pixel_sampling_only_in_color_and_both_images(sample, app):
+    path, _ = sample
+    window = MainWindow()
+    window._load_image(path)
+    window._on_pixel_clicked(5, 6)
+    assert window._selected_pixel is None
+    assert window._section == "Image"
+
+    window._switch_section("Color")
+    window._process("grayscale")
+    window._on_pixel_clicked(5, 6, processed=True)
+    assert window._selected_origin == "Processed"
+    assert window._selected_pixel == (5, 6)
+    assert "Processed pixel" in window.statusBar().currentMessage()
+
+    window._on_pixel_clicked(5, 6, processed=False)
+    assert window._selected_origin == "Original"
+    window._switch_section("Filters")
+    window._on_pixel_clicked(10, 20, processed=True)
+    assert window._section == "Filters"
+    assert window._selected_pixel == (5, 6)
+    window.close()
+
+
+def test_histograms_embed_below_images_on_tab_open(sample, app):
+    path, _ = sample
+    window = MainWindow()
+    window._load_image(path)
+    assert window._histogram_panel.isHidden()
+    window._switch_section("Histogram")
+    assert not window._histogram_panel.isHidden()
+    assert window._histogram_panel._original is not None
+    assert window._histogram_panel._processed is not None
+    assert len(window._histogram_panel.axes) == 2
+    assert window._histogram_panel.channel.count() == 5
+    window._histogram_panel.channel.setCurrentText("Blue")
+    assert window._histogram_panel.channel.currentText() == "Blue"
+    window._switch_section("Image")
+    assert window._histogram_panel.isHidden()
+    window.close()
