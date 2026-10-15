@@ -52,7 +52,7 @@ def test_document(sample):
     [
         "original", "grayscale", "adjust", "linear", "gamma",
         "erode", "dilate", "open", "close", "gradient",
-        "sharpen", "motion", "emboss", "median", "canny", "roberts",
+        "invert", "sharpen", "motion", "emboss", "median", "canny", "roberts",
         "harris", "sift", "fast",
     ],
 )
