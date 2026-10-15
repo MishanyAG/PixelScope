@@ -468,7 +468,9 @@ def test_filters_and_features_have_independent_switches(sample, app):
 
     window._switch_section("Features")
     sift = window._tool_cards["sift"]
-    sift.details_button.click()
+    # SIFT has no adjustable settings, so only an ON/OFF checkbox remains.
+    assert sift.details_button is None
+    assert not sift._has_settings
     assert len(window._pipeline.steps) == 1
     sift.enabled_box.setChecked(True)
     assert [s.operation for s in window._pipeline.steps] == ["invert", "sift"]
@@ -517,4 +519,112 @@ def test_histograms_embed_below_images_on_tab_open(sample, app):
     assert window._histogram_panel.channel.currentText() == "Blue"
     window._switch_section("Image")
     assert window._histogram_panel.isHidden()
+    window.close()
+
+
+def test_checkbox_is_visible_and_no_settings_means_no_expander(sample, app):
+    from src.pixelscope.ui.tool_card import VisibleCheckBox
+
+    window = MainWindow()
+    window._load_image(sample[0])
+    window._switch_section("Filters")
+
+    invert = window._tool_cards["invert"]
+    sharpen = window._tool_cards["sharpen"]
+    emboss = window._tool_cards["emboss"]
+    roberts = window._tool_cards["roberts"]
+    motion = window._tool_cards["motion"]
+    median = window._tool_cards["median"]
+    canny = window._tool_cards["canny"]
+
+    for card in (invert, sharpen, emboss, roberts, motion, median, canny):
+        assert isinstance(card.enabled_box, VisibleCheckBox)
+        assert card.enabled_box.minimumHeight() >= 30
+        assert card.enabled_box.toolTip()
+    for card in (invert, sharpen, emboss, roberts):
+        assert card.details_button is None
+        assert not card._has_settings
+        assert not card.sliders
+    for card in (motion, median, canny):
+        assert card.details_button is not None
+        assert card._has_settings
+        assert card.sliders
+
+    assert not invert.enabled_box.isChecked()
+    invert.enabled_box.click()
+    assert invert.enabled_box.isChecked()
+    assert window._pipeline.is_enabled("Filters", "invert")
+    invert.enabled_box.click()
+    assert not invert.enabled_box.isChecked()
+    assert not window._pipeline.is_enabled("Filters", "invert")
+
+    window._switch_section("Features")
+    assert window._tool_cards["sift"].details_button is None
+    assert window._tool_cards["harris"].details_button is not None
+    assert window._tool_cards["fast"].details_button is not None
+    window.close()
+
+
+def test_suggested_filename_uses_original_name_and_extension(sample, app, tmp_path, monkeypatch):
+    window = MainWindow()
+    path, rgb = sample
+    window._load_image(path)
+    assert window._suggested_save_path() == path.with_name("sample_edited.png")
+
+    proposed = []
+    output = tmp_path / "sample_edited.png"
+
+    def fake_save_dialog(parent, title, suggested, filters, initial_filter):
+        proposed.append((title, suggested, filters, initial_filter))
+        return str(output), initial_filter
+
+    monkeypatch.setattr(
+        "src.pixelscope.ui.main_window.QFileDialog.getSaveFileName",
+        fake_save_dialog,
+    )
+    window.save_result()
+    assert proposed[0][1] == str(output)
+    assert output.exists()
+    assert np.array_equal(np.asarray(Image.open(output).convert("RGB")), rgb)
+    assert np.array_equal(np.asarray(Image.open(path).convert("RGB")), rgb)
+
+    # The source name and extension are honored for all supported still formats.
+    for suffix in (".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".webp"):
+        sample_path = tmp_path / f"green eyes{suffix}"
+        Image.fromarray(rgb).save(sample_path)
+        window._load_image(sample_path)
+        assert window._suggested_save_path().name == f"green eyes_edited{suffix}"
+
+    window.close()
+
+
+def test_animated_gif_export_defaults_to_png(sample, app, tmp_path):
+    path, rgb = sample
+    gif = tmp_path / "animated.gif"
+    Image.fromarray(rgb).save(gif)
+    window = MainWindow()
+    window._load_image(gif)
+    assert window._suggested_save_path().name == "animated_edited.png"
+    window.close()
+
+
+def test_saving_to_source_path_is_blocked(sample, app, monkeypatch):
+    path, rgb = sample
+    window = MainWindow()
+    window._load_image(path)
+    window._process("grayscale")
+
+    monkeypatch.setattr(
+        "src.pixelscope.ui.main_window.QFileDialog.getSaveFileName",
+        lambda *args: (str(path), "PNG image (*.png)"),
+    )
+    warnings = []
+    monkeypatch.setattr(
+        "src.pixelscope.ui.main_window.QMessageBox.warning",
+        lambda *args: warnings.append(args),
+    )
+    window.save_result()
+    assert len(warnings) == 1
+    assert "Original image" in warnings[0][1]
+    assert np.array_equal(np.asarray(Image.open(path).convert("RGB")), rgb)
     window.close()
