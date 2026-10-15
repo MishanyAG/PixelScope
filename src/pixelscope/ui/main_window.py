@@ -355,6 +355,7 @@ class MainWindow(QMainWindow):
         self._histogram_action.setEnabled(has_image and not standalone)
 
     def _clear_controls(self) -> None:
+        self._tool_cards = {}
         while self._controls.count():
             item = self._controls.takeAt(0)
             widget = item.widget()
@@ -494,24 +495,110 @@ class MainWindow(QMainWindow):
         self._text("Both histograms appear below their corresponding images. Switch between RGB, R, G, B and luminance in the chart header.")
 
     def _panel_morphology(self) -> None:
-        self._text("Automatic Otsu binary thresholding before morphology.")
-        self._selector((("Choose operation…", ""),) + _MORPHOLOGY, self._choose_morph, self._morph_operation)
-        self._slider("Kernel size", 1, 21, self._morph_k, self._change_morph_kernel)
+        self._text(
+            "Turn effects on and off independently. Open a tool's settings "
+            "without applying it. Multiple enabled effects combine in order."
+        )
+        for title, operation in _MORPHOLOGY:
+            self._tool_card("Morphology", operation, title)
         self._button("Reset Morphology", lambda: self._reset_current_section("Morphology"))
 
     def _panel_filters(self) -> None:
-        self._text("Spatial filters and edge detectors.")
-        self._selector((("Choose filter…", ""),) + _FILTERS, self._choose_filter, self._filter_operation)
-        self._slider("Kernel size", 3, 31, self._filter_k, self._change_filter_kernel)
-        self._slider("Canny lower threshold", 0, 254, self._low, self._change_low)
-        self._slider("Canny upper threshold", 1, 255, self._high, self._change_high)
+        self._text(
+            "Each filter has an independent ON/OFF switch. "
+            "Expand its settings before or after enabling."
+        )
+        for title, operation in _FILTERS:
+            self._tool_card("Filters", operation, title)
         self._button("Reset Filters", lambda: self._reset_current_section("Filters"))
 
     def _panel_features(self) -> None:
-        self._text("Highlight detected corners and keypoints.")
-        self._selector((("Choose detector…", ""),) + _FEATURES, self._choose_feature, self._feature_operation)
-        self._slider("Sensitivity", 1, 80, self._sensitivity, self._change_sensitivity)
+        self._text(
+            "Enable detectors individually; disable one to remove only "
+            "its contribution. SIFT uses its built-in feature settings."
+        )
+        for title, operation in _FEATURES:
+            self._tool_card("Features", operation, title)
         self._button("Reset Features", lambda: self._reset_current_section("Features"))
+
+    def _tool_card(self, section: str, operation: str, title: str) -> None:
+        if self._pipeline is None:
+            return
+        defaults: dict[str, int] = {}
+        settings: list[tuple] = []
+        if section == "Morphology":
+            defaults = {"kernel_size": 5}
+            definitions = (("Kernel size", 1, 21, "kernel_size"),)
+        elif operation in ("motion", "median"):
+            defaults = {"kernel_size": 5}
+            definitions = (("Kernel size", 3, 31, "kernel_size"),)
+        elif operation == "canny":
+            defaults = {"low": 70, "high": 150}
+            definitions = (
+                ("Lower threshold", 0, 254, "low"),
+                ("Upper threshold", 1, 255, "high"),
+            )
+        elif operation in ("harris", "fast"):
+            defaults = {"sensitivity": 20}
+            definitions = (("Sensitivity", 1, 80, "sensitivity"),)
+        else:
+            definitions = ()
+
+        parameters = self._tool_settings.setdefault(operation, defaults.copy())
+        for caption, low, high, key in definitions:
+            settings.append((caption, low, high, parameters[key], key))
+
+        card = ToolCard(
+            title=title,
+            enabled=self._pipeline.is_enabled(section, operation),
+            settings=settings,
+            expanded=operation in self._expanded_tools,
+            on_toggle=lambda active, sec=section, op=operation:
+                self._toggle_tool(sec, op, active),
+            on_parameter=lambda key, val, sec=section, op=operation:
+                self._set_tool_parameter(sec, op, key, val),
+            on_expand=lambda expanded, op=operation:
+                self._set_tool_expanded(op, expanded),
+        )
+        self._tool_cards[operation] = card
+        self._controls.addWidget(card)
+
+    def _set_tool_expanded(self, operation: str, expanded: bool) -> None:
+        if expanded:
+            self._expanded_tools.add(operation)
+        else:
+            self._expanded_tools.discard(operation)
+
+    def _set_tool_parameter(
+        self, section: str, operation: str, key: str, value: int
+    ) -> None:
+        self._tool_settings.setdefault(operation, {})[key] = value
+        # Keep legacy slider variables in sync for programmatic callers.
+        if key == "kernel_size":
+            if section == "Morphology":
+                self._morph_k = value
+            else:
+                self._filter_k = value
+        elif key == "low":
+            self._low = value
+        elif key == "high":
+            self._high = value
+        elif key == "sensitivity":
+            self._sensitivity = value
+        if self._pipeline is not None and self._pipeline.is_enabled(section, operation):
+            self._process(operation, section=section)
+
+    def _toggle_tool(self, section: str, operation: str, active: bool) -> None:
+        if self._pipeline is None:
+            return
+        if active:
+            self._process(operation, section=section)
+            return
+        self._result = self._pipeline.remove(section, operation)
+        self._operation = "tool disabled"
+        self._result_view.set_array(self._result)
+        self._result_view.set_caption(f"Processed · {operation} off")
+        self.statusBar().showMessage(f"{operation} disabled · other edits retained")
 
     def _panel_compare(self) -> None:
         self._text("Select 3–10 images for perceptual similarity comparison.")
@@ -632,11 +719,20 @@ class MainWindow(QMainWindow):
             self._gamma = 1.0
         elif section == "Morphology":
             self._morph_operation, self._morph_k = "", 5
+            for _, operation in _MORPHOLOGY:
+                self._tool_settings.pop(operation, None)
+                self._expanded_tools.discard(operation)
         elif section == "Filters":
             self._filter_operation, self._filter_k = "", 5
             self._low, self._high = 70, 150
+            for _, operation in _FILTERS:
+                self._tool_settings.pop(operation, None)
+                self._expanded_tools.discard(operation)
         elif section == "Features":
             self._feature_operation, self._sensitivity = "", 20
+            for _, operation in _FEATURES:
+                self._tool_settings.pop(operation, None)
+                self._expanded_tools.discard(operation)
 
     def _reset_all_edits(self) -> None:
         if self._pipeline is None:
