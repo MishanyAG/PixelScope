@@ -35,8 +35,9 @@ from ..core.image_document import ImageDocument
 from ..core.processing import load_rgb, pixel_colors, run_tool
 from ..core.similarity import most_similar
 from ..core.video import VideoProcessor
-from .dialogs import HistogramDialog
+from .histogram_panel import HistogramPanel
 from .image_viewer import ImageViewer
+from .tool_card import ToolCard
 
 
 _IMAGE_SUFFIXES = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
@@ -74,6 +75,7 @@ class MainWindow(QMainWindow):
         self._source: np.ndarray | None = None
         self._result: np.ndarray | None = None
         self._selected_pixel: tuple[int, int] | None = None
+        self._selected_origin = "Original"
         self._section = "Image"
         self._operation = "original"
         self._pipeline: EditPipeline | None = None
@@ -91,6 +93,10 @@ class MainWindow(QMainWindow):
         self._morph_operation = ""
         self._filter_operation = ""
         self._feature_operation = ""
+        # Individual tool controls do not apply an effect until enabled.
+        self._tool_settings: dict[str, dict[str, int]] = {}
+        self._expanded_tools: set[str] = set()
+        self._tool_cards: dict[str, ToolCard] = {}
 
         self._video_path: str | None = None
         self._capture: cv2.VideoCapture | None = None
@@ -197,14 +203,28 @@ class MainWindow(QMainWindow):
 
     def _build_editor_workspace(self) -> QWidget:
         page = QWidget()
-        row = QHBoxLayout(page)
-        row.setContentsMargins(0, 0, 0, 0)
-        row.setSpacing(12)
-        self._source_view = ImageViewer("Original · click to sample pixel")
-        self._source_view.pixel_clicked.connect(self._on_pixel_clicked)
-        row.addWidget(self._source_view, 1)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(10)
+
+        pictures = QHBoxLayout()
+        pictures.setSpacing(12)
+        self._source_view = ImageViewer("Original image")
+        self._source_view.pixel_clicked.connect(
+            lambda x, y: self._on_pixel_clicked(x, y, processed=False)
+        )
+        pictures.addWidget(self._source_view, 1)
+
         self._result_view = ImageViewer("Processed")
-        row.addWidget(self._result_view, 1)
+        self._result_view.pixel_clicked.connect(
+            lambda x, y: self._on_pixel_clicked(x, y, processed=True)
+        )
+        pictures.addWidget(self._result_view, 1)
+        layout.addLayout(pictures, 1)
+
+        self._histogram_panel = HistogramPanel()
+        self._histogram_panel.setVisible(False)
+        layout.addWidget(self._histogram_panel, 0)
         return page
 
     def _build_compare_workspace(self) -> QWidget:
@@ -306,6 +326,11 @@ class MainWindow(QMainWindow):
             self._pipeline.leave_tool()
 
         self._section = section
+        self._histogram_panel.setVisible(section == "Histogram")
+        self._source_view.set_pixel_sampling_enabled(section == "Color")
+        self._result_view.set_pixel_sampling_enabled(section == "Color")
+        if section == "Histogram" and self._source is not None and self._result is not None:
+            self._histogram_panel.set_images(self._source, self._result)
         self._update_navigation()
         self._workspace_title.setText(f"{section} workspace")
         self._render_controls()
@@ -426,7 +451,7 @@ class MainWindow(QMainWindow):
         self._button("Close image", self._clear_image)
 
     def _panel_color(self) -> None:
-        self._text("Click a pixel in the ORIGINAL image to inspect its values.")
+        self._text("Click either image to inspect a pixel. Sampling works only in Color.")
         self._button("Convert image to grayscale", lambda: self._process("grayscale"))
         self._button("Reset Color changes", lambda: self._reset_current_section("Color"))
 
@@ -435,9 +460,10 @@ class MainWindow(QMainWindow):
             return
 
         x, y = self._selected_pixel
-        color = tuple(int(n) for n in self._source[y, x])
+        sample = self._result if self._selected_origin == "Processed" else self._source
+        color = tuple(int(n) for n in sample[y, x])
         values = pixel_colors(color)
-        self._text(f"Selected pixel · x={x}, y={y}", "metaValue")
+        self._text(f"{self._selected_origin} pixel · x={x}, y={y}", "metaValue")
         swatch = QLabel("                         ")
         swatch.setFixedHeight(34)
         swatch.setStyleSheet(
@@ -465,8 +491,7 @@ class MainWindow(QMainWindow):
 
     def _panel_histogram(self) -> None:
         self._text("Compare pixel intensity distributions before and after processing.")
-        self._button("Open RGB histograms", self._show_histograms, primary=True)
-        self._text("Switch between RGB, R, G, B, and luminance inside the chart.")
+        self._text("Both histograms appear below their corresponding images. Switch between RGB, R, G, B and luminance in the chart header.")
 
     def _panel_morphology(self) -> None:
         self._text("Automatic Otsu binary thresholding before morphology.")
@@ -678,6 +703,8 @@ class MainWindow(QMainWindow):
             self._operation = operation
             self._result_view.set_array(result)
             self._result_view.set_caption(f"Processed · {operation}")
+            if self._section == "Histogram":
+                self._histogram_panel.set_images(self._source, self._result)
             self.statusBar().showMessage(f"Applied: {operation} · changes kept")
         except (cv2.error, ValueError, OverflowError) as exc:
             QMessageBox.warning(self, "Processing error", str(exc))
@@ -686,16 +713,17 @@ class MainWindow(QMainWindow):
         # Kept as a compatibility alias; only Image has the global reset UI.
         self._reset_all_edits()
 
-    def _on_pixel_clicked(self, x: int, y: int) -> None:
-        if self._source is None:
+    def _on_pixel_clicked(self, x: int, y: int, processed: bool = False) -> None:
+        if self._section != "Color" or self._source is None or self._result is None:
             return
         self._selected_pixel = (x, y)
-        color = self._source[y, x].tolist()
-        self.statusBar().showMessage(f"Pixel ({x}, {y}) · RGB {color}")
-        if self._section != "Color":
-            self._switch_section("Color")
-        else:
-            self._render_controls()
+        self._selected_origin = "Processed" if processed else "Original"
+        sample = self._result if processed else self._source
+        red, green, blue = (int(value) for value in sample[y, x])
+        self.statusBar().showMessage(
+            f"{self._selected_origin} pixel ({x}, {y}) · RGB {red}, {green}, {blue}"
+        )
+        self._render_controls()
 
     def open_image(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -718,6 +746,7 @@ class MainWindow(QMainWindow):
         self._source = source
         self._result = source.copy()
         self._selected_pixel = None
+        self._selected_origin = "Original"
         self._operation = "original"
         self._pipeline = EditPipeline(source)
         for section in ("Adjustments", "Morphology", "Filters", "Features"):
@@ -739,6 +768,7 @@ class MainWindow(QMainWindow):
         self._source = None
         self._result = None
         self._selected_pixel = None
+        self._selected_origin = "Original"
         self._operation = "original"
         self._pipeline = None
         for section in ("Adjustments", "Morphology", "Filters", "Features"):
@@ -770,8 +800,7 @@ class MainWindow(QMainWindow):
         if self._source is None or self._result is None:
             self.statusBar().showMessage("Open an image first")
             return
-        dialog = HistogramDialog(self._source, self._result, self)
-        dialog.exec()
+        self._switch_section("Histogram")
 
     def _compare_images(self) -> None:
         paths, _ = QFileDialog.getOpenFileNames(
