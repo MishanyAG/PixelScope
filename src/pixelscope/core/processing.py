@@ -86,6 +86,8 @@ def apply_filter(
 ) -> np.ndarray:
     """Apply spatial filters or edge operators."""
     k = max(3, kernel_size | 1)
+    if operation == "invert":
+        return cv2.bitwise_not(rgb)
     if operation == "sharpen":
         kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]], dtype=np.float32)
         return cv2.filter2D(rgb, -1, kernel)
@@ -204,7 +206,7 @@ def run_tool(
         return grayscale_correction(rgb, operation, gamma)
     if operation in _MORPH_OPERATIONS:
         return morphology(rgb, operation, kernel_size)
-    if operation in ("sharpen", "motion", "emboss", "median", "canny", "roberts"):
+    if operation in ("invert", "sharpen", "motion", "emboss", "median", "canny", "roberts"):
         return apply_filter(rgb, operation, kernel_size, low, high)
     if operation in ("harris", "sift", "fast"):
         return features(rgb, operation, sensitivity)
