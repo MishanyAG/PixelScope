@@ -16,9 +16,9 @@ PixelScope is a Python desktop app with a dark Qt UI for exploring color spaces,
 | **Filters** | Color inversion, sharpen, motion blur, emboss, median, Canny edges, Roberts edges |
 | **Features** | Harris, SIFT and FAST detectors |
 | **Compare** | Find two most similar images among 3–10 using difference hashes |
-| **Video** | MOG2 background subtraction and Gaussian blur of moving objects |
+| **Video** | Dedicated video workspace: color foreground extraction, binary motion mask, and adjustable blur of moving objects |
 
-All image tools recompute from the **original** image. Changes are previewed without overwriting the source file.
+Image tools **build on the currently edited result**. For example, grayscale → brightness keeps the image grayscale. Slider changes recompute their own live preview without repeatedly stacking the same operation. The original file is never overwritten unless you explicitly export an image to a chosen path.
 
 ## Run on Windows
 
@@ -43,7 +43,7 @@ git pull
 .\.venv\Scripts\python.exe main.py
 ```
 
-**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tool categories.
+**Shortcuts:** Ctrl+O opens an image; Ctrl+S exports the processed result. Click the original image to sample a pixel; use the left navigation to switch tools. Image processing tools are disabled until an image is loaded. Compare and Video have independent viewers, and image Open/Save controls disappear there.
 
 ## Tests
 
@@ -89,6 +89,6 @@ PixelScope/
 - Large source images and video frames may require substantial CPU/RAM. PySide6 tools run on the GUI thread in the current prototype, so very large inputs can reduce responsiveness.
 - Tests validate algorithm outputs and the main window under an offscreen Qt runner; interactive Windows acceptance testing is still recommended.
 
-**Status:** v0.2 — functional prototype.
+**Status:** v0.3 — cumulative edits and independent workspaces.
 
 Built by Mikhail Aleshin.
