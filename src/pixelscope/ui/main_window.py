@@ -645,6 +645,10 @@ class MainWindow(QMainWindow):
         except (cv2.error, ValueError, OverflowError) as exc:
             QMessageBox.warning(self, "Processing error", str(exc))
 
+    def _reset_preview(self) -> None:
+        if self._source is not None:
+            self._process("original")
+
     def _on_pixel_clicked(self, x: int, y: int) -> None:
         if self._source is None:
             return
