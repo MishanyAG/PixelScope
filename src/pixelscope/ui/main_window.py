@@ -760,7 +760,7 @@ class MainWindow(QMainWindow):
         if choice == QMessageBox.StandardButton.Yes:
             self._reset_all_edits()
 
-    def _process(self, operation: str) -> None:
+    def _process(self, operation: str, section: str | None = None) -> None:
         if self._pipeline is None:
             self.statusBar().showMessage("Open an image first")
             return
@@ -768,40 +768,47 @@ class MainWindow(QMainWindow):
             self._reset_all_edits()
             return
 
-        # The only "global" UI sections do not own edits. This fallback also
-        # helps developer-created shortcuts/tests associate actions correctly.
-        section = self._section
-        if section in ("Image", "Histogram"):
+        resolved_section = section or self._section
+        if resolved_section in ("Image", "Histogram", "Compare", "Video"):
             if operation == "grayscale":
-                section = "Color"
+                resolved_section = "Color"
             elif operation in ("adjust", "linear", "gamma"):
-                section = "Adjustments"
-            elif operation in {v for _, v in _MORPHOLOGY}:
-                section = "Morphology"
-            elif operation in {v for _, v in _FEATURES}:
-                section = "Features"
+                resolved_section = "Adjustments"
+            elif operation in {op for _, op in _MORPHOLOGY}:
+                resolved_section = "Morphology"
+            elif operation in {op for _, op in _FEATURES}:
+                resolved_section = "Features"
             else:
-                section = "Filters"
+                resolved_section = "Filters"
+
+        if resolved_section in ("Morphology", "Filters", "Features"):
+            defaults = {
+                "kernel_size": self._morph_k if resolved_section == "Morphology" else self._filter_k,
+                "low": self._low,
+                "high": self._high,
+                "sensitivity": self._sensitivity,
+            }
+            parameters = self._tool_settings.setdefault(operation, {})
+            # Direct callers of _process (including tests) still work.
+            for key, value in defaults.items():
+                parameters.setdefault(key, value)
+        else:
+            parameters = {
+                "brightness": self._brightness,
+                "contrast": self._contrast,
+                "saturation": self._saturation,
+                "gamma": self._gamma,
+            }
 
         try:
-            result = self._pipeline.apply(
-                section, operation,
-                brightness=self._brightness,
-                contrast=self._contrast,
-                saturation=self._saturation,
-                kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
-                low=self._low,
-                high=self._high,
-                sensitivity=self._sensitivity,
-                gamma=self._gamma,
-            )
+            result = self._pipeline.apply(resolved_section, operation, **parameters)
             self._result = result
             self._operation = operation
             self._result_view.set_array(result)
             self._result_view.set_caption(f"Processed · {operation}")
             if self._section == "Histogram":
                 self._histogram_panel.set_images(self._source, self._result)
-            self.statusBar().showMessage(f"Applied: {operation} · changes kept")
+            self.statusBar().showMessage(f"{operation} enabled / updated")
         except (cv2.error, ValueError, OverflowError) as exc:
             QMessageBox.warning(self, "Processing error", str(exc))
 
