@@ -228,3 +228,62 @@ def test_video_removes_background_and_blurs_only_movement():
     blurred = processor.process(moving, "moving_blur")
     assert np.array_equal(blurred[10, 10], moving[10, 10])
     assert not np.array_equal(blurred[45, 50], moving[45, 50])
+
+
+def test_compare_results_display_in_compare_workspace(sample, tmp_path, monkeypatch, app):
+    path, rgb = sample
+    second = tmp_path / "copy.png"
+    third = tmp_path / "other.png"
+    Image.fromarray(rgb).save(second)
+    Image.fromarray(255 - rgb).save(third)
+
+    monkeypatch.setattr(
+        "src.pixelscope.ui.main_window.QFileDialog.getOpenFileNames",
+        lambda *args, **kwargs: ([str(path), str(second), str(third)], ""),
+    )
+
+    window = MainWindow()
+    window._load_image(path)
+    original_result = window._result.copy()
+    window._switch_section("Compare")
+    window._compare_images()
+
+    assert not window._compare_left._pixmap.isNull()
+    assert not window._compare_right._pixmap.isNull()
+    assert "dHash distance: 0 / 64" in window._compare_info.text()
+    assert np.array_equal(window._result, original_result)
+    assert window._mode_stack.currentIndex() == 1
+    window.close()
+
+
+def test_video_frames_display_only_in_video_workspace(sample, app):
+    _, rgb = sample
+
+    class FakeCapture:
+        def __init__(self, rgb):
+            self.rgb = rgb
+            self.released = False
+
+        def read(self):
+            return True, cv2.cvtColor(self.rgb, cv2.COLOR_RGB2BGR)
+
+        def release(self):
+            self.released = True
+
+    window = MainWindow()
+    window._switch_section("Video")
+    window._capture = FakeCapture(rgb)
+    window._video_processor = VideoProcessor()
+    window._advance_video()
+
+    assert not window._video_source_view._pixmap.isNull()
+    assert not window._video_result_view._pixmap.isNull()
+    assert window._source is None
+    assert window._source_view._pixmap.isNull()
+    assert window._result_view._pixmap.isNull()
+
+    capture = window._capture
+    window._switch_section("Compare")
+    assert capture.released
+    assert window._mode_stack.currentIndex() == 1
+    window.close()
