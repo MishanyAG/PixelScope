@@ -422,12 +422,13 @@ class MainWindow(QMainWindow):
         ):
             self._text(f"{label}:  {value}")
 
-        self._button("Restore original", self._reset_preview)
+        self._button("Reset all edits…", self._confirm_reset_all)
         self._button("Close image", self._clear_image)
 
     def _panel_color(self) -> None:
         self._text("Click a pixel in the ORIGINAL image to inspect its values.")
         self._button("Convert image to grayscale", lambda: self._process("grayscale"))
+        self._button("Reset Color changes", lambda: self._reset_current_section("Color"))
 
         if self._source is None or self._selected_pixel is None:
             self._text("Pixel not selected.")
@@ -456,11 +457,11 @@ class MainWindow(QMainWindow):
         self._slider("Brightness", -100, 100, self._brightness, self._change_brightness)
         self._slider("Contrast %", 0, 200, self._contrast, self._change_contrast)
         self._slider("Saturation %", 0, 200, self._saturation, self._change_saturation)
-        self._button("Reset current adjustments", self._restore_adjustments)
+        self._button("Reset Adjustments", lambda: self._reset_current_section("Adjustments"))
         self._text("Grayscale correction", "metaValue")
         self._button("Linear contrast stretch", lambda: self._process("linear"))
         self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
-        self._button("Apply nonlinear gamma correction", lambda: self._process("gamma"))
+        self._text("Gamma correction updates immediately when you move its slider.")
 
     def _panel_histogram(self) -> None:
         self._text("Compare pixel intensity distributions before and after processing.")
@@ -469,26 +470,23 @@ class MainWindow(QMainWindow):
 
     def _panel_morphology(self) -> None:
         self._text("Automatic Otsu binary thresholding before morphology.")
-        self._selector(_MORPHOLOGY, self._choose_morph, self._morph_operation)
+        self._selector((("Choose operation…", ""),) + _MORPHOLOGY, self._choose_morph, self._morph_operation)
         self._slider("Kernel size", 1, 21, self._morph_k, self._change_morph_kernel)
-        self._button("Apply selected morphology", lambda: self._process(self._morph_operation), primary=True)
-        self._button("Restore original", self._reset_preview)
+        self._button("Reset Morphology", lambda: self._reset_current_section("Morphology"))
 
     def _panel_filters(self) -> None:
         self._text("Spatial filters and edge detectors.")
-        self._selector(_FILTERS, self._choose_filter, self._filter_operation)
+        self._selector((("Choose filter…", ""),) + _FILTERS, self._choose_filter, self._filter_operation)
         self._slider("Kernel size", 3, 31, self._filter_k, self._change_filter_kernel)
         self._slider("Canny lower threshold", 0, 254, self._low, self._change_low)
         self._slider("Canny upper threshold", 1, 255, self._high, self._change_high)
-        self._button("Apply selected filter", lambda: self._process(self._filter_operation), primary=True)
-        self._button("Restore original", self._reset_preview)
+        self._button("Reset Filters", lambda: self._reset_current_section("Filters"))
 
     def _panel_features(self) -> None:
         self._text("Highlight detected corners and keypoints.")
-        self._selector(_FEATURES, self._choose_feature, self._feature_operation)
+        self._selector((("Choose detector…", ""),) + _FEATURES, self._choose_feature, self._feature_operation)
         self._slider("Sensitivity", 1, 80, self._sensitivity, self._change_sensitivity)
-        self._button("Detect keypoints", lambda: self._process(self._feature_operation), primary=True)
-        self._button("Restore original", self._reset_preview)
+        self._button("Reset Features", lambda: self._reset_current_section("Features"))
 
     def _panel_compare(self) -> None:
         self._text("Select 3–10 images for perceptual similarity comparison.")
@@ -544,60 +542,100 @@ class MainWindow(QMainWindow):
 
     def _change_gamma(self, value: int) -> None:
         self._gamma = value / 100.0
-        if self._operation == "gamma":
-            self._process("gamma")
+        self._process("gamma")
 
     def _restore_adjustments(self) -> None:
-        if (
-            self._source is not None
-            and self._preview_operation == "adjust"
-            and self._preview_base is not None
-        ):
-            self._result = self._preview_base.copy()
-            self._result_view.set_array(self._result)
-            self._result_view.set_caption("Processed · adjustments reset")
-            self._preview_base = None
-            self._preview_operation = None
-            self._operation = "adjustments reset"
-        self._brightness, self._contrast, self._saturation = 0, 100, 100
-        self._render_controls()
+        # Backwards-compatible alias for the Reset Adjustments control.
+        self._reset_current_section("Adjustments")
 
     def _choose_morph(self, operation: str) -> None:
         self._morph_operation = operation
-        self._process(operation)
+        if operation:
+            self._process(operation)
 
     def _change_morph_kernel(self, value: int) -> None:
         self._morph_k = value
-        if self._operation in {value for _, value in _MORPHOLOGY}:
-            self._process(self._operation)
+        if self._morph_operation:
+            self._process(self._morph_operation)
 
     def _choose_filter(self, operation: str) -> None:
         self._filter_operation = operation
-        self._process(operation)
+        if operation:
+            self._process(operation)
 
     def _change_filter_kernel(self, value: int) -> None:
         self._filter_k = value
-        if self._operation in {value for _, value in _FILTERS}:
-            self._process(self._operation)
+        if self._filter_operation:
+            self._process(self._filter_operation)
 
     def _change_low(self, value: int) -> None:
         self._low = value
-        if self._operation == "canny":
+        if self._filter_operation == "canny":
             self._process("canny")
 
     def _change_high(self, value: int) -> None:
         self._high = value
-        if self._operation == "canny":
+        if self._filter_operation == "canny":
             self._process("canny")
 
     def _choose_feature(self, operation: str) -> None:
         self._feature_operation = operation
-        self._process(operation)
+        if operation:
+            self._process(operation)
 
     def _change_sensitivity(self, value: int) -> None:
         self._sensitivity = value
-        if self._operation in {value for _, value in _FEATURES}:
-            self._process(self._operation)
+        if self._feature_operation:
+            self._process(self._feature_operation)
+
+    def _reset_current_section(self, section: str) -> None:
+        if self._pipeline is None:
+            return
+        self._result = self._pipeline.reset_section(section)
+        self._reset_section_controls(section)
+        self._operation = f"reset {section.lower()}"
+        self._result_view.set_array(self._result)
+        self._result_view.set_caption(f"Processed · {self._operation}")
+        self._render_controls()
+        self.statusBar().showMessage(f"Reset {section} only · other edits preserved")
+
+    def _reset_section_controls(self, section: str) -> None:
+        if section == "Adjustments":
+            self._brightness, self._contrast, self._saturation = 0, 100, 100
+            self._gamma = 1.0
+        elif section == "Morphology":
+            self._morph_operation, self._morph_k = "", 5
+        elif section == "Filters":
+            self._filter_operation, self._filter_k = "", 5
+            self._low, self._high = 70, 150
+        elif section == "Features":
+            self._feature_operation, self._sensitivity = "", 20
+
+    def _reset_all_edits(self) -> None:
+        if self._pipeline is None:
+            return
+        self._result = self._pipeline.reset_all()
+        for section in ("Adjustments", "Morphology", "Filters", "Features"):
+            self._reset_section_controls(section)
+        self._operation = "original"
+        self._result_view.set_array(self._result)
+        self._result_view.set_caption("Processed · original")
+        self._render_controls()
+        self.statusBar().showMessage("All image edits reset")
+
+    def _confirm_reset_all(self) -> None:
+        if self._pipeline is None or not self._pipeline.steps:
+            return
+        choice = QMessageBox.question(
+            self,
+            "Reset all image edits?",
+            "This will remove edits from ALL sections.\n"
+            "To reset only one section, use its Reset button.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice == QMessageBox.StandardButton.Yes:
+            self._reset_all_edits()
 
     def _process(self, operation: str) -> None:
         if self._source is None or self._result is None:
