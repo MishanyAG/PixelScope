@@ -52,6 +52,7 @@ class ImageViewer(QFrame):
 
         self._canvas = _Canvas()
         self._canvas.pixel_clicked.connect(self.pixel_clicked.emit)
+        self.set_pixel_sampling_enabled(False)
         self._canvas.setText("Drop an image here\nor click “Open image”")
         self._canvas.setObjectName("viewerHint")
 
@@ -82,6 +83,11 @@ class ImageViewer(QFrame):
         self._canvas.image_size = (width, height)
         self._canvas.setText("")
         self._refresh()
+
+    def set_pixel_sampling_enabled(self, enabled: bool) -> None:
+        self._canvas.setCursor(
+            Qt.CursorShape.CrossCursor if enabled else Qt.CursorShape.ArrowCursor
+        )
 
     def set_placeholder(self, message: str) -> None:
         self._pixmap = QPixmap()
