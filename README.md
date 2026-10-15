@@ -18,7 +18,7 @@ PixelScope is a Python desktop app with a dark Qt UI for exploring color spaces,
 | **Compare** | Find two most similar images among 3–10 using difference hashes |
 | **Video** | Dedicated video workspace: color foreground extraction, binary motion mask, and adjustable blur of moving objects |
 
-Image tools **build on the currently edited result**, using replayable edit history. For example, grayscale → brightness keeps the image grayscale. In Morphology, Filters and Features, every tool has its own **expandable settings and ON/OFF checkbox**. Opening settings changes nothing, enabling adds one effect, and disabling removes just that effect. Multiple effects can be combined deliberately and tuned independently. Adjustment sliders still update immediately without stacking the same effect repeatedly. Each editing tab has a **Reset** button that removes only edits from that tab, then recomputes the remaining edits in their original order. Reset also returns that tab's controls to their defaults. The Image tab has a separate, clearly labeled **Reset all edits** command with confirmation. The original file is never overwritten unless you explicitly export an image to a chosen path.
+Image tools **build on the currently edited result**, using replayable edit history. For example, grayscale → brightness keeps the image grayscale. In Morphology, Filters and Features, every tool has an **obvious square ON/OFF checkbox**. The settings arrow appears only for tools with adjustable parameters. Opening settings changes nothing, enabling adds one effect, and disabling removes just that effect. Multiple effects can be combined deliberately and tuned independently. Adjustment sliders still update immediately without stacking the same effect repeatedly. Each editing tab has a **Reset** button that removes only edits from that tab, then recomputes the remaining edits in their original order. Reset also returns that tab's controls to their defaults. The Image tab has a separate, clearly labeled **Reset all edits** command with confirmation. When exporting, PixelScope suggests the source filename plus **_edited** (for example, `portrait.jpg` becomes `portrait_edited.jpg`). For GIF sources it suggests PNG, because it edits a single frame. PixelScope protects the original file from accidental overwrite.
 
 ## Run on Windows
 
@@ -89,6 +89,6 @@ PixelScope/
 - Large source images and video frames may require substantial CPU/RAM. PySide6 tools run on the GUI thread in the current prototype, so very large inputs can reduce responsiveness.
 - Tests validate algorithm outputs and the main window under an offscreen Qt runner; interactive Windows acceptance testing is still recommended.
 
-**Status:** v0.5 — independent effect cards, dual pixel sampling, embedded histograms.
+**Status:** v0.5.1 — clearer effect checkboxes, settings-only expanders, sensible export filenames.
 
 Built by Mikhail Aleshin.
