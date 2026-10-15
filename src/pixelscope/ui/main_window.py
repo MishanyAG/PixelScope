@@ -50,6 +50,7 @@ _MORPHOLOGY = (
     ("Morphological gradient", "gradient"),
 )
 _FILTERS = (
+    ("Invert colors", "invert"),
     ("Sharpen", "sharpen"),
     ("Motion blur", "motion"),
     ("Emboss", "emboss"),
