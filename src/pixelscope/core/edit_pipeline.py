@@ -1,15 +1,14 @@
-"""Non-destructive image edit history with section-scoped resets.
+"""Non-destructive edit stack.
 
-Operations are replayed from the immutable source image, so editing an earlier
-step never destroys changes made by later tools.
+Each tool can be independently enabled, disabled, or tuned. Its step is
+uniquely identified by (section, operation), so navigating between tools
+never applies the same effect twice by accident. Steps are replayed in
+the order in which tools were first enabled.
 """
-
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-
 import numpy as np
-
 from .processing import run_tool
 
 
@@ -23,49 +22,39 @@ class EditStep:
 class EditPipeline:
     def __init__(self, source: np.ndarray) -> None:
         self.source = source.copy()
+        self.result = self.source.copy()
         self.steps: list[EditStep] = []
-        self.result = source.copy()
         self.active_index: int | None = None
 
     def leave_tool(self) -> None:
-        """Finish the active live preview without clearing the history."""
+        # No visual side effect. Retained for existing client code.
         self.active_index = None
 
+    def is_enabled(self, section: str, operation: str) -> bool:
+        return any(s.section == section and s.operation == operation
+                   for s in self.steps)
+
     def apply(self, section: str, operation: str, **parameters) -> np.ndarray:
-        """Apply immediately. Live slider updates replace only their own step."""
         if operation == "original":
             return self.reset_all()
-
-        if operation == "adjust":
-            # The three main sliders are one section-wide adjustment block.
-            # Re-entering Adjustments modifies that block, replaying all later
-            # steps as well rather than accidentally double-applying contrast.
-            existing = next(
-                (i for i, step in enumerate(self.steps)
-                 if step.section == "Adjustments" and step.operation == "adjust"),
-                None,
-            )
-            if existing is not None:
-                self.steps[existing].parameters = parameters
-                self.active_index = existing
+        for step in self.steps:
+            if step.section == section and step.operation == operation:
+                step.parameters = parameters
                 return self._render()
 
-        index = self.active_index
-        if (
-            index is not None
-            and index < len(self.steps)
-            and self.steps[index].section == section
-            and self.steps[index].operation == operation
-        ):
-            self.steps[index].parameters = parameters
-        else:
-            self.steps.append(EditStep(section, operation, parameters))
-            self.active_index = len(self.steps) - 1
+        self.steps.append(EditStep(section, operation, parameters))
+        return self._render()
 
+    def remove(self, section: str, operation: str) -> np.ndarray:
+        self.steps = [
+            step for step in self.steps
+            if not (step.section == section and step.operation == operation)
+        ]
+        self.active_index = None
         return self._render()
 
     def reset_section(self, section: str) -> np.ndarray:
-        self.steps = [step for step in self.steps if step.section != section]
+        self.steps = [s for s in self.steps if s.section != section]
         self.active_index = None
         return self._render()
 
@@ -75,8 +64,8 @@ class EditPipeline:
         return self._render()
 
     def _render(self) -> np.ndarray:
-        result = self.source.copy()
+        current = self.source.copy()
         for step in self.steps:
-            result = run_tool(result, step.operation, **step.parameters)
-        self.result = result
-        return result
+            current = run_tool(current, step.operation, **step.parameters)
+        self.result = current
+        return current
