@@ -11,7 +11,7 @@ import numpy as np
 
 
 class VideoProcessor:
-    def __init__(self, blur_size: int = 71) -> None:
+    def __init__(self, blur_size: int = 101) -> None:
         self._subtractor = cv2.createBackgroundSubtractorMOG2(
             history=240, varThreshold=20, detectShadows=False
         )
