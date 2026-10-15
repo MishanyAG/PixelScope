@@ -519,9 +519,11 @@ class MainWindow(QMainWindow):
             "white indicates detected movement, black indicates background."
         )
         self._text(
-            "The model needs time to learn the background. Moving cameras, "
-            "camera shake, low light and tiny movements can reduce accuracy."
+            "Only motion is detected, not animals or people specifically. "
+            "Camera movement can make furniture and walls appear to move. "
+            "Use a fixed camera; the first frames help train the background."
         )
+        self._text("Playback loops automatically until you press Stop video.")
 
     def _change_video_blur(self, value: int) -> None:
         self._video_blur = value
@@ -817,6 +819,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Video error", "Unable to open this video or codec.")
             return
         self._capture = capture
+        self._video_path = path
         self._video_processor = VideoProcessor(blur_size=self._video_blur)
         self._video_info.setText(
             f"{Path(path).name} · Learning the background. "
@@ -834,9 +837,23 @@ class MainWindow(QMainWindow):
 
         ok, bgr = self._capture.read()
         if not ok:
-            self._stop_video()
-            self.statusBar().showMessage("Video playback finished")
-            return
+            # Automatically replay and start learning the background anew.
+            # Some codecs cannot seek: reopen the file as a fallback.
+            self._capture.set(cv2.CAP_PROP_POS_FRAMES, 0)
+            ok, bgr = self._capture.read()
+            if not ok and self._video_path is not None:
+                self._capture.release()
+                self._capture = cv2.VideoCapture(self._video_path)
+                ok, bgr = self._capture.read()
+            if not ok:
+                self._stop_video()
+                self.statusBar().showMessage("Video cannot be replayed")
+                return
+            self._video_processor = VideoProcessor(blur_size=self._video_blur)
+            self._video_info.setText(
+                f"{Path(self._video_path).name if self._video_path else 'Video'} · "
+                "Looping playback · background model restarted"
+            )
 
         # Bound processing resolution for a responsive side-by-side video UI.
         height, width = bgr.shape[:2]
@@ -860,6 +877,7 @@ class MainWindow(QMainWindow):
             self._capture.release()
             self._capture = None
         self._video_processor = None
+        self._video_path = None
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if any(
