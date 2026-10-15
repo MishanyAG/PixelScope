@@ -1,7 +1,7 @@
 """Main PixelScope desktop workspace.
 
-Every processing tool operates on the original image; previews never stack
-destructive transformations. Qt owns only widgets, not processing algorithms.
+Edits accumulate through a replayable history; section reset affects only
+operations belonging to the current editor tab.
 """
 
 from __future__ import annotations
@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ..core.edit_pipeline import EditPipeline
 from ..core.image_document import ImageDocument
 from ..core.processing import load_rgb, pixel_colors, run_tool
 from ..core.similarity import most_similar
@@ -75,10 +76,7 @@ class MainWindow(QMainWindow):
         self._selected_pixel: tuple[int, int] | None = None
         self._section = "Image"
         self._operation = "original"
-        # The latest operation is a live preview, rebuilt from a fixed input.
-        # Navigating away commits its pixels as input to the next operation.
-        self._preview_base: np.ndarray | None = None
-        self._preview_operation: str | None = None
+        self._pipeline: EditPipeline | None = None
         self._navigation: dict[str, QPushButton] = {}
 
         self._brightness = 0
@@ -90,10 +88,11 @@ class MainWindow(QMainWindow):
         self._low = 70
         self._high = 150
         self._sensitivity = 20
-        self._morph_operation = "erode"
-        self._filter_operation = "sharpen"
-        self._feature_operation = "harris"
+        self._morph_operation = ""
+        self._filter_operation = ""
+        self._feature_operation = ""
 
+        self._video_path: str | None = None
         self._capture: cv2.VideoCapture | None = None
         self._video_processor: VideoProcessor | None = None
         self._video_operation = "background"
@@ -113,28 +112,23 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready · Open an image to get started")
 
     def _create_actions(self) -> None:
-        file_menu = self.menuBar().addMenu("File")
-        self._open_action = QAction("Open image…", self)
+        # Native keyboard shortcuts remain available, but the redundant File
+        # and View menus are deliberately absent from the visible interface.
+        self._open_action = QAction("Open image", self)
         self._open_action.setShortcut(QKeySequence.StandardKey.Open)
         self._open_action.triggered.connect(self.open_image)
-        file_menu.addAction(self._open_action)
+        self.addAction(self._open_action)
 
-        self._save_action = QAction("Save result…", self)
+        self._save_action = QAction("Save image", self)
         self._save_action.setShortcut(QKeySequence.StandardKey.Save)
         self._save_action.triggered.connect(self.save_result)
         self._save_action.setEnabled(False)
-        file_menu.addAction(self._save_action)
+        self.addAction(self._save_action)
 
-        file_menu.addSeparator()
-        quit_action = QAction("Exit", self)
-        quit_action.setShortcut(QKeySequence.StandardKey.Quit)
-        quit_action.triggered.connect(self.close)
-        file_menu.addAction(quit_action)
-
-        view_menu = self.menuBar().addMenu("View")
-        self._histogram_action = QAction("Compare histograms…", self)
+        self._histogram_action = QAction("View histograms", self)
         self._histogram_action.triggered.connect(self._show_histograms)
-        view_menu.addAction(self._histogram_action)
+        self._histogram_action.setEnabled(False)
+        self.addAction(self._histogram_action)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -172,7 +166,7 @@ class MainWindow(QMainWindow):
             self._navigation[section] = button
 
         layout.addStretch()
-        version = QLabel("v0.3 · workspace update")
+        version = QLabel("v0.4 · instant editing")
         version.setObjectName("muted")
         layout.addWidget(version)
         return frame
@@ -308,12 +302,8 @@ class MainWindow(QMainWindow):
         if self._section == "Video" and section != "Video":
             self._stop_video()
 
-        # Commit the current live preview when changing tools. Future edits
-        # build on the displayed result, not on the original image.
-        self._preview_base = None
-        self._preview_operation = None
-        if self._section == "Adjustments":
-            self._brightness, self._contrast, self._saturation = 0, 100, 100
+        if self._pipeline is not None:
+            self._pipeline.leave_tool()
 
         self._section = section
         self._update_navigation()
