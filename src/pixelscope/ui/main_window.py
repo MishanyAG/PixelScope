@@ -638,44 +638,51 @@ class MainWindow(QMainWindow):
             self._reset_all_edits()
 
     def _process(self, operation: str) -> None:
-        if self._source is None or self._result is None:
+        if self._pipeline is None:
             self.statusBar().showMessage("Open an image first")
             return
-        try:
-            if operation == "original":
-                self._preview_base = None
-                self._preview_operation = None
-                self._brightness, self._contrast, self._saturation = 0, 100, 100
-                output = self._source.copy()
-                # Update sliders if the reset was requested inside Adjustments.
-                if self._section == "Adjustments":
-                    self._render_controls()
+        if operation == "original":
+            self._reset_all_edits()
+            return
+
+        # The only "global" UI sections do not own edits. This fallback also
+        # helps developer-created shortcuts/tests associate actions correctly.
+        section = self._section
+        if section in ("Image", "Histogram"):
+            if operation == "grayscale":
+                section = "Color"
+            elif operation in ("adjust", "linear", "gamma"):
+                section = "Adjustments"
+            elif operation in {v for _, v in _MORPHOLOGY}:
+                section = "Morphology"
+            elif operation in {v for _, v in _FEATURES}:
+                section = "Features"
             else:
-                if self._preview_operation != operation or self._preview_base is None:
-                    self._preview_base = self._result.copy()
-                    self._preview_operation = operation
-                output = run_tool(
-                    self._preview_base, operation,
-                    brightness=self._brightness,
-                    contrast=self._contrast,
-                    saturation=self._saturation,
-                    kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
-                    low=self._low,
-                    high=self._high,
-                    sensitivity=self._sensitivity,
-                    gamma=self._gamma,
-                )
-            self._result = output
+                section = "Filters"
+
+        try:
+            result = self._pipeline.apply(
+                section, operation,
+                brightness=self._brightness,
+                contrast=self._contrast,
+                saturation=self._saturation,
+                kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
+                low=self._low,
+                high=self._high,
+                sensitivity=self._sensitivity,
+                gamma=self._gamma,
+            )
+            self._result = result
             self._operation = operation
-            self._result_view.set_array(output)
+            self._result_view.set_array(result)
             self._result_view.set_caption(f"Processed · {operation}")
-            self.statusBar().showMessage(f"Applied: {operation} · edits retained")
+            self.statusBar().showMessage(f"Applied: {operation} · changes kept")
         except (cv2.error, ValueError, OverflowError) as exc:
             QMessageBox.warning(self, "Processing error", str(exc))
 
     def _reset_preview(self) -> None:
-        if self._source is not None:
-            self._process("original")
+        # Kept as a compatibility alias; only Image has the global reset UI.
+        self._reset_all_edits()
 
     def _on_pixel_clicked(self, x: int, y: int) -> None:
         if self._source is None:
@@ -710,9 +717,9 @@ class MainWindow(QMainWindow):
         self._result = source.copy()
         self._selected_pixel = None
         self._operation = "original"
-        self._preview_base = None
-        self._preview_operation = None
-        self._brightness, self._contrast, self._saturation = 0, 100, 100
+        self._pipeline = EditPipeline(source)
+        for section in ("Adjustments", "Morphology", "Filters", "Features"):
+            self._reset_section_controls(section)
         self._source_view.set_array(source)
         self._result_view.set_array(source)
         self._result_view.set_caption("Processed · original")
@@ -731,9 +738,9 @@ class MainWindow(QMainWindow):
         self._result = None
         self._selected_pixel = None
         self._operation = "original"
-        self._preview_base = None
-        self._preview_operation = None
-        self._brightness, self._contrast, self._saturation = 0, 100, 100
+        self._pipeline = None
+        for section in ("Adjustments", "Morphology", "Filters", "Features"):
+            self._reset_section_controls(section)
         self._source_view.clear_image()
         self._result_view.clear_image()
         if self._section not in ("Image", "Compare", "Video"):
