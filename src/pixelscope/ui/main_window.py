@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -33,7 +34,7 @@ from ..core.image_document import ImageDocument
 from ..core.processing import load_rgb, pixel_colors, run_tool
 from ..core.similarity import most_similar
 from ..core.video import VideoProcessor
-from .dialogs import HistogramDialog, SimilarityDialog
+from .dialogs import HistogramDialog
 from .image_viewer import ImageViewer
 
 
@@ -74,6 +75,10 @@ class MainWindow(QMainWindow):
         self._selected_pixel: tuple[int, int] | None = None
         self._section = "Image"
         self._operation = "original"
+        # The latest operation is a live preview, rebuilt from a fixed input.
+        # Navigating away commits its pixels as input to the next operation.
+        self._preview_base: np.ndarray | None = None
+        self._preview_operation: str | None = None
         self._navigation: dict[str, QPushButton] = {}
 
         self._brightness = 0
@@ -92,6 +97,7 @@ class MainWindow(QMainWindow):
         self._capture: cv2.VideoCapture | None = None
         self._video_processor: VideoProcessor | None = None
         self._video_operation = "background"
+        self._video_blur = 71
         self._video_timer = QTimer(self)
         self._video_timer.timeout.connect(self._advance_video)
 
@@ -103,14 +109,15 @@ class MainWindow(QMainWindow):
         self._create_actions()
         self._build_ui()
         self._render_controls()
+        self._update_navigation()
         self.statusBar().showMessage("Ready · Open an image to get started")
 
     def _create_actions(self) -> None:
         file_menu = self.menuBar().addMenu("File")
-        open_action = QAction("Open image…", self)
-        open_action.setShortcut(QKeySequence.StandardKey.Open)
-        open_action.triggered.connect(self.open_image)
-        file_menu.addAction(open_action)
+        self._open_action = QAction("Open image…", self)
+        self._open_action.setShortcut(QKeySequence.StandardKey.Open)
+        self._open_action.triggered.connect(self.open_image)
+        file_menu.addAction(self._open_action)
 
         self._save_action = QAction("Save result…", self)
         self._save_action.setShortcut(QKeySequence.StandardKey.Save)
@@ -125,9 +132,9 @@ class MainWindow(QMainWindow):
         file_menu.addAction(quit_action)
 
         view_menu = self.menuBar().addMenu("View")
-        histogram_action = QAction("Compare histograms…", self)
-        histogram_action.triggered.connect(self._show_histograms)
-        view_menu.addAction(histogram_action)
+        self._histogram_action = QAction("Compare histograms…", self)
+        self._histogram_action.triggered.connect(self._show_histograms)
+        view_menu.addAction(self._histogram_action)
 
     def _build_ui(self) -> None:
         root = QWidget()
@@ -165,7 +172,7 @@ class MainWindow(QMainWindow):
             self._navigation[section] = button
 
         layout.addStretch()
-        version = QLabel("v0.2 · processing suite")
+        version = QLabel("v0.3 · workspace update")
         version.setObjectName("muted")
         layout.addWidget(version)
         return frame
@@ -182,16 +189,78 @@ class MainWindow(QMainWindow):
         row.setContentsMargins(18, 20, 0, 20)
         row.setSpacing(12)
 
-        self._source_view = ImageViewer("Original · click to sample pixel")
-        self._source_view.pixel_clicked.connect(self._on_pixel_clicked)
-        row.addWidget(self._source_view, 1)
-
-        self._result_view = ImageViewer("Processed")
-        row.addWidget(self._result_view, 1)
+        # Each mode has an independent center workspace. The editor's current
+        # image never becomes a placeholder or video frame in the other modes.
+        self._mode_stack = QStackedWidget()
+        self._mode_stack.addWidget(self._build_editor_workspace())
+        self._mode_stack.addWidget(self._build_compare_workspace())
+        self._mode_stack.addWidget(self._build_video_workspace())
+        row.addWidget(self._mode_stack, 1)
         row.addWidget(self._build_inspector())
 
         layout.addWidget(work, 1)
         return root
+
+    def _build_editor_workspace(self) -> QWidget:
+        page = QWidget()
+        row = QHBoxLayout(page)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(12)
+        self._source_view = ImageViewer("Original · click to sample pixel")
+        self._source_view.pixel_clicked.connect(self._on_pixel_clicked)
+        row.addWidget(self._source_view, 1)
+        self._result_view = ImageViewer("Processed")
+        row.addWidget(self._result_view, 1)
+        return page
+
+    def _build_compare_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        self._compare_info = QLabel(
+            "Choose 3–10 images to find the closest visual pair. "
+            "This workspace is independent of the image editor."
+        )
+        self._compare_info.setObjectName("muted")
+        self._compare_info.setWordWrap(True)
+        layout.addWidget(self._compare_info)
+
+        images = QHBoxLayout()
+        images.setSpacing(12)
+        self._compare_left = ImageViewer("Closest match · A")
+        self._compare_left.set_placeholder("No images compared yet")
+        self._compare_right = ImageViewer("Closest match · B")
+        self._compare_right.set_placeholder("No images compared yet")
+        images.addWidget(self._compare_left, 1)
+        images.addWidget(self._compare_right, 1)
+        layout.addLayout(images, 1)
+        return page
+
+    def _build_video_workspace(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+        self._video_info = QLabel(
+            "Background subtraction learns the static scene over several frames. "
+            "For clearer results, use a stationary camera."
+        )
+        self._video_info.setObjectName("muted")
+        self._video_info.setWordWrap(True)
+        layout.addWidget(self._video_info)
+
+        images = QHBoxLayout()
+        images.setSpacing(12)
+        self._video_source_view = ImageViewer("Source video")
+        self._video_source_view.set_placeholder("Load a video to begin")
+        self._video_result_view = ImageViewer("Motion processing")
+        self._video_result_view.set_placeholder("Processed video will appear here")
+        images.addWidget(self._video_source_view, 1)
+        images.addWidget(self._video_result_view, 1)
+        layout.addLayout(images, 1)
+        return page
 
     def _build_topbar(self) -> QFrame:
         frame = QFrame()
@@ -205,15 +274,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._workspace_title)
         layout.addStretch()
 
-        self._save_button = QPushButton("Save result")
+        self._save_button = QPushButton("Save image")
         self._save_button.setEnabled(False)
         self._save_button.clicked.connect(self.save_result)
         layout.addWidget(self._save_button)
 
-        open_button = QPushButton("Open image")
-        open_button.setObjectName("primaryButton")
-        open_button.clicked.connect(self.open_image)
-        layout.addWidget(open_button)
+        self._open_button = QPushButton("Open image")
+        self._open_button.setObjectName("primaryButton")
+        self._open_button.clicked.connect(self.open_image)
+        layout.addWidget(self._open_button)
         return frame
 
     def _build_inspector(self) -> QScrollArea:
@@ -232,17 +301,43 @@ class MainWindow(QMainWindow):
         return scroll
 
     def _switch_section(self, section: str) -> None:
+        if section == self._section:
+            return
+        if section not in ("Image", "Compare", "Video") and self._source is None:
+            return
         if self._section == "Video" and section != "Video":
             self._stop_video()
-        self._section = section
 
+        # Commit the current live preview when changing tools. Future edits
+        # build on the displayed result, not on the original image.
+        self._preview_base = None
+        self._preview_operation = None
+        if self._section == "Adjustments":
+            self._brightness, self._contrast, self._saturation = 0, 100, 100
+
+        self._section = section
+        self._update_navigation()
+        self._workspace_title.setText(f"{section} workspace")
+        self._render_controls()
+
+    def _update_navigation(self) -> None:
+        standalone = self._section in ("Compare", "Video")
+        has_image = self._source is not None
         for name, button in self._navigation.items():
-            button.setProperty("active", name == section)
+            button.setEnabled(name in ("Image", "Compare", "Video") or has_image)
+            button.setProperty("active", name == self._section)
             button.style().unpolish(button)
             button.style().polish(button)
 
-        self._workspace_title.setText(f"{section} workspace")
-        self._render_controls()
+        self._mode_stack.setCurrentIndex(
+            {"Compare": 1, "Video": 2}.get(self._section, 0)
+        )
+        self._open_button.setVisible(not standalone)
+        self._save_button.setVisible(not standalone)
+        self._save_button.setEnabled(has_image)
+        self._open_action.setEnabled(not standalone)
+        self._save_action.setEnabled(has_image and not standalone)
+        self._histogram_action.setEnabled(has_image and not standalone)
 
     def _clear_controls(self) -> None:
         while self._controls.count():
@@ -296,7 +391,8 @@ class MainWindow(QMainWindow):
     def _render_controls(self) -> None:
         self._clear_controls()
         self._text(self._section, "sectionTitle")
-        self._text("Choose a tool. The original image remains unchanged.")
+        if self._section not in ("Compare", "Video"):
+            self._text("Tools build on the previous result. The source file stays unchanged.")
 
         if self._section == "Image":
             self._panel_image()
@@ -370,7 +466,7 @@ class MainWindow(QMainWindow):
         self._slider("Brightness", -100, 100, self._brightness, self._change_brightness)
         self._slider("Contrast %", 0, 200, self._contrast, self._change_contrast)
         self._slider("Saturation %", 0, 200, self._saturation, self._change_saturation)
-        self._button("Restore adjustments", self._restore_adjustments)
+        self._button("Reset current adjustments", self._restore_adjustments)
         self._text("Grayscale correction", "metaValue")
         self._button("Linear contrast stretch", lambda: self._process("linear"))
         self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
@@ -405,23 +501,44 @@ class MainWindow(QMainWindow):
         self._button("Restore original", self._reset_preview)
 
     def _panel_compare(self) -> None:
-        self._text("Load 3–10 images to find the two most similar ones using dHash.")
+        self._text("Select 3–10 images for perceptual similarity comparison.")
         self._button("Choose 3–10 images", self._compare_images, primary=True)
-        self._text("The lowest 64-bit difference-hash distance wins. "
-                   "This is perceptual similarity, not exact object recognition.")
+        self._text(
+            "The smallest difference-hash distance identifies the closest pair. "
+            "The results appear in this dedicated workspace."
+        )
 
     def _panel_video(self) -> None:
-        self._text("Analyze a video frame by frame.")
+        self._text("Motion analysis on a dedicated video workspace.")
         self._selector(
-            (("Background subtraction (MOG2)", "background"),
-             ("Blur moving objects", "moving_blur")),
+            (
+                ("Remove background · color subject", "background"),
+                ("Foreground mask · white = movement", "mask"),
+                ("Blur moving objects", "moving_blur"),
+            ),
             self._choose_video_operation,
             self._video_operation,
         )
+        self._slider(
+            "Motion blur kernel", 15, 121,
+            self._video_blur, self._change_video_blur,
+        )
         self._button("Open video and play", self._open_video, primary=True)
         self._button("Stop video", self._stop_video)
-        self._text("Supports common formats such as MP4, AVI, and MOV if your "
-                   "OpenCV installation includes the required codec.")
+        self._text(
+            "Background removal keeps moving objects in their original colors "
+            "and replaces the background with black. In the optional mask view, "
+            "white indicates detected movement, black indicates background."
+        )
+        self._text(
+            "The model needs time to learn the background. Moving cameras, "
+            "camera shake, low light and tiny movements can reduce accuracy."
+        )
+
+    def _change_video_blur(self, value: int) -> None:
+        self._video_blur = value
+        if self._video_processor is not None:
+            self._video_processor.blur_size = value
 
     def _change_brightness(self, value: int) -> None:
         self._brightness = value
@@ -441,8 +558,18 @@ class MainWindow(QMainWindow):
             self._process("gamma")
 
     def _restore_adjustments(self) -> None:
+        if (
+            self._source is not None
+            and self._preview_operation == "adjust"
+            and self._preview_base is not None
+        ):
+            self._result = self._preview_base.copy()
+            self._result_view.set_array(self._result)
+            self._result_view.set_caption("Processed · adjustments reset")
+            self._preview_base = None
+            self._preview_operation = None
+            self._operation = "adjustments reset"
         self._brightness, self._contrast, self._saturation = 0, 100, 100
-        self._reset_preview()
         self._render_controls()
 
     def _choose_morph(self, operation: str) -> None:
@@ -483,32 +610,40 @@ class MainWindow(QMainWindow):
             self._process(self._operation)
 
     def _process(self, operation: str) -> None:
-        if self._source is None:
+        if self._source is None or self._result is None:
             self.statusBar().showMessage("Open an image first")
             return
         try:
-            output = run_tool(
-                self._source, operation,
-                brightness=self._brightness,
-                contrast=self._contrast,
-                saturation=self._saturation,
-                kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
-                low=self._low,
-                high=self._high,
-                sensitivity=self._sensitivity,
-                gamma=self._gamma,
-            )
+            if operation == "original":
+                self._preview_base = None
+                self._preview_operation = None
+                self._brightness, self._contrast, self._saturation = 0, 100, 100
+                output = self._source.copy()
+                # Update sliders if the reset was requested inside Adjustments.
+                if self._section == "Adjustments":
+                    self._render_controls()
+            else:
+                if self._preview_operation != operation or self._preview_base is None:
+                    self._preview_base = self._result.copy()
+                    self._preview_operation = operation
+                output = run_tool(
+                    self._preview_base, operation,
+                    brightness=self._brightness,
+                    contrast=self._contrast,
+                    saturation=self._saturation,
+                    kernel_size=self._morph_k if operation in {v for _, v in _MORPHOLOGY} else self._filter_k,
+                    low=self._low,
+                    high=self._high,
+                    sensitivity=self._sensitivity,
+                    gamma=self._gamma,
+                )
             self._result = output
             self._operation = operation
             self._result_view.set_array(output)
             self._result_view.set_caption(f"Processed · {operation}")
-            self.statusBar().showMessage(f"Applied: {operation}")
+            self.statusBar().showMessage(f"Applied: {operation} · edits retained")
         except (cv2.error, ValueError, OverflowError) as exc:
             QMessageBox.warning(self, "Processing error", str(exc))
-
-    def _reset_preview(self) -> None:
-        if self._source is not None:
-            self._process("original")
 
     def _on_pixel_clicked(self, x: int, y: int) -> None:
         if self._source is None:
@@ -543,11 +678,15 @@ class MainWindow(QMainWindow):
         self._result = source.copy()
         self._selected_pixel = None
         self._operation = "original"
+        self._preview_base = None
+        self._preview_operation = None
+        self._brightness, self._contrast, self._saturation = 0, 100, 100
         self._source_view.set_array(source)
         self._result_view.set_array(source)
         self._result_view.set_caption("Processed · original")
-        self._save_action.setEnabled(True)
-        self._save_button.setEnabled(True)
+        if self._section in ("Compare", "Video"):
+            self._switch_section("Image")
+        self._update_navigation()
         self._render_controls()
         self.statusBar().showMessage(
             f"{document.path.name} · {document.resolution_text} · {document.file_format}"
@@ -560,10 +699,14 @@ class MainWindow(QMainWindow):
         self._result = None
         self._selected_pixel = None
         self._operation = "original"
+        self._preview_base = None
+        self._preview_operation = None
+        self._brightness, self._contrast, self._saturation = 0, 100, 100
         self._source_view.clear_image()
         self._result_view.clear_image()
-        self._save_button.setEnabled(False)
-        self._save_action.setEnabled(False)
+        if self._section not in ("Image", "Compare", "Video"):
+            self._switch_section("Image")
+        self._update_navigation()
         self._render_controls()
         self.statusBar().showMessage("Ready")
 
@@ -601,16 +744,25 @@ class MainWindow(QMainWindow):
             return
         try:
             pair = most_similar([Path(p) for p in paths])
-            dialog = SimilarityDialog(pair, self)
-            dialog.exec()
+            self._compare_left.set_array(load_rgb(str(pair.first)))
+            self._compare_right.set_array(load_rgb(str(pair.second)))
+            self._compare_left.set_caption(pair.first.name)
+            self._compare_right.set_caption(pair.second.name)
+            self._compare_info.setText(
+                f"Closest pair from {len(paths)} images · "
+                f"dHash distance: {pair.distance} / 64 (lower = closer)"
+            )
+            self.statusBar().showMessage(
+                f"Most similar: {pair.first.name} and {pair.second.name}"
+            )
         except (OSError, ValueError, cv2.error) as exc:
             QMessageBox.warning(self, "Image comparison failed", str(exc))
 
     def _choose_video_operation(self, operation: str) -> None:
-        if operation == self._video_operation:
-            return
+        # Preserve the learned background while changing the display mode.
         self._video_operation = operation
-        self._video_processor = VideoProcessor()
+        if hasattr(self, "_video_result_view"):
+            self._video_result_view.set_caption(f"Video · {operation}")
 
     def _open_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -626,7 +778,11 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Video error", "Unable to open this video or codec.")
             return
         self._capture = capture
-        self._video_processor = VideoProcessor()
+        self._video_processor = VideoProcessor(blur_size=self._video_blur)
+        self._video_info.setText(
+            f"{Path(path).name} · Learning the background. "
+            "Use a steady-camera clip for clear foreground separation."
+        )
         fps = capture.get(cv2.CAP_PROP_FPS)
         fps = fps if np.isfinite(fps) and fps > 0 else 25
         self._video_timer.start(max(16, round(1000 / min(fps, 60))))
@@ -643,11 +799,17 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Video playback finished")
             return
 
+        # Bound processing resolution for a responsive side-by-side video UI.
+        height, width = bgr.shape[:2]
+        if width > 960:
+            bgr = cv2.resize(
+                bgr, (960, round(height * 960 / width)), interpolation=cv2.INTER_AREA
+            )
         rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         processed = self._video_processor.process(rgb, self._video_operation)
-        self._source_view.set_array(rgb)
-        self._result_view.set_array(processed)
-        self._result_view.set_caption(f"Video · {self._video_operation}")
+        self._video_source_view.set_array(rgb)
+        self._video_result_view.set_array(processed)
+        self._video_result_view.set_caption(f"Video · {self._video_operation}")
         self.statusBar().showMessage(f"Video · {self._video_operation}")
 
     def _stop_video(self) -> None:
@@ -656,11 +818,6 @@ class MainWindow(QMainWindow):
             self._capture.release()
             self._capture = None
         self._video_processor = None
-        if hasattr(self, "_source_view") and self._source is not None:
-            self._source_view.set_array(self._source)
-            if self._result is not None:
-                self._result_view.set_array(self._result)
-                self._result_view.set_caption(f"Processed · {self._operation}")
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if any(
