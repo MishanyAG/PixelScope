@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
             self._navigation[section] = button
 
         layout.addStretch()
-        version = QLabel("v0.4 · instant editing")
+        version = QLabel("v0.5 · independent tools")
         version.setObjectName("muted")
         layout.addWidget(version)
         return frame
