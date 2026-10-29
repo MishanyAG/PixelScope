@@ -484,6 +484,8 @@ class MainWindow(QMainWindow):
         self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
 
     def _panel_histogram(self) -> None:
+        # Histogram controls live in the panel below the images.
+        pass
 
     def _panel_morphology(self) -> None:
         for title, operation in _MORPHOLOGY:
