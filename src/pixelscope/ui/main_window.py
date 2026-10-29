@@ -481,7 +481,7 @@ class MainWindow(QMainWindow):
         self._button("Reset Adjustments", lambda: self._reset_current_section("Adjustments"))
         self._text("Grayscale correction", "metaValue")
         self._button("Linear contrast stretch", lambda: self._process("linear"))
-        self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
+        self._slider("Gamma (grayscale) × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
 
     def _panel_histogram(self) -> None:
         # Histogram controls live in the panel below the images.
@@ -521,7 +521,7 @@ class MainWindow(QMainWindow):
             )
         elif operation in ("harris", "fast"):
             defaults = {"sensitivity": 20}
-            definitions = (("Sensitivity", 1, 80, "sensitivity"),)
+            definitions = (("Detection threshold", 1, 80, "sensitivity"),)
         else:
             definitions = ()
 
