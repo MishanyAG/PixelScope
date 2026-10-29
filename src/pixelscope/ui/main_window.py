@@ -172,7 +172,7 @@ class MainWindow(QMainWindow):
             self._navigation[section] = button
 
         layout.addStretch()
-        version = QLabel("v0.5 · independent tools")
+        version = QLabel("v0.5.1")
         version.setObjectName("muted")
         layout.addWidget(version)
         return frame
@@ -234,8 +234,7 @@ class MainWindow(QMainWindow):
         layout.setSpacing(12)
 
         self._compare_info = QLabel(
-            "Choose 3–10 images to find the closest visual pair. "
-            "This workspace is independent of the image editor."
+            "Choose 3–10 images to find the closest pair."
         )
         self._compare_info.setObjectName("muted")
         self._compare_info.setWordWrap(True)
@@ -258,8 +257,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         self._video_info = QLabel(
-            "Background subtraction learns the static scene over several frames. "
-            "For clearer results, use a stationary camera."
+            "Use a video with a stationary camera."
         )
         self._video_info.setObjectName("muted")
         self._video_info.setWordWrap(True)
@@ -407,8 +405,6 @@ class MainWindow(QMainWindow):
     def _render_controls(self) -> None:
         self._clear_controls()
         self._text(self._section, "sectionTitle")
-        if self._section not in ("Compare", "Video"):
-            self._text("Tools build on the previous result. The source file stays unchanged.")
 
         if self._section == "Image":
             self._panel_image()
@@ -452,7 +448,7 @@ class MainWindow(QMainWindow):
         self._button("Close image", self._clear_image)
 
     def _panel_color(self) -> None:
-        self._text("Click either image to inspect a pixel. Sampling works only in Color.")
+        self._text("Click a pixel in either image to inspect its color.")
         self._button("Convert image to grayscale", lambda: self._process("grayscale"))
         self._button("Reset Color changes", lambda: self._reset_current_section("Color"))
 
@@ -477,10 +473,8 @@ class MainWindow(QMainWindow):
             self._text(model, "metaValue")
             self._text(value)
 
-        self._text("CMYK is a simple device-independent approximation; LAB uses sRGB / D65.")
 
     def _panel_adjustments(self) -> None:
-        self._text("Live brightness, contrast, and saturation adjustments.")
         self._slider("Brightness", -100, 100, self._brightness, self._change_brightness)
         self._slider("Contrast %", 0, 200, self._contrast, self._change_contrast)
         self._slider("Saturation %", 0, 200, self._saturation, self._change_saturation)
@@ -488,35 +482,20 @@ class MainWindow(QMainWindow):
         self._text("Grayscale correction", "metaValue")
         self._button("Linear contrast stretch", lambda: self._process("linear"))
         self._slider("Gamma × 100", 10, 300, round(self._gamma * 100), self._change_gamma)
-        self._text("Gamma correction updates immediately when you move its slider.")
 
     def _panel_histogram(self) -> None:
-        self._text("Compare pixel intensity distributions before and after processing.")
-        self._text("Both histograms appear below their corresponding images. Switch between RGB, R, G, B and luminance in the chart header.")
 
     def _panel_morphology(self) -> None:
-        self._text(
-            "Turn effects on and off independently. Open a tool's settings "
-            "without applying it. Multiple enabled effects combine in order."
-        )
         for title, operation in _MORPHOLOGY:
             self._tool_card("Morphology", operation, title)
         self._button("Reset Morphology", lambda: self._reset_current_section("Morphology"))
 
     def _panel_filters(self) -> None:
-        self._text(
-            "Each filter has an independent ON/OFF switch. "
-            "Expand its settings before or after enabling."
-        )
         for title, operation in _FILTERS:
             self._tool_card("Filters", operation, title)
         self._button("Reset Filters", lambda: self._reset_current_section("Filters"))
 
     def _panel_features(self) -> None:
-        self._text(
-            "Enable detectors individually; disable one to remove only "
-            "its contribution. SIFT uses its built-in feature settings."
-        )
         for title, operation in _FEATURES:
             self._tool_card("Features", operation, title)
         self._button("Reset Features", lambda: self._reset_current_section("Features"))
@@ -601,15 +580,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{operation} disabled · other edits retained")
 
     def _panel_compare(self) -> None:
-        self._text("Select 3–10 images for perceptual similarity comparison.")
         self._button("Choose 3–10 images", self._compare_images, primary=True)
-        self._text(
-            "The smallest difference-hash distance identifies the closest pair. "
-            "The results appear in this dedicated workspace."
-        )
 
     def _panel_video(self) -> None:
-        self._text("Motion analysis on a dedicated video workspace.")
         self._selector(
             (
                 ("Remove background · color subject", "background"),
@@ -625,18 +598,6 @@ class MainWindow(QMainWindow):
         )
         self._button("Open video and play", self._open_video, primary=True)
         self._button("Stop video", self._stop_video)
-        self._text(
-            "Background removal keeps moving objects in their original colors "
-            "and replaces the background with black. In the optional mask view, "
-            "white indicates detected movement, black indicates background."
-        )
-        self._text(
-            "Only motion is detected, not animals or people specifically. "
-            "Camera movement can make furniture and walls appear to move. "
-            "Use a fixed camera; the first frames help train the background."
-        )
-        self._text("In Blur moving objects mode, the kernel updates on the next frame as you move the slider. No video reload is needed.")
-        self._text("Playback loops automatically until you press Stop video.")
 
     def _change_video_blur(self, value: int) -> None:
         self._video_blur = value
